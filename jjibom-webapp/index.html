@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#07141d" />
+  <meta name="description" content="스마트폰 카메라로 낚시찌 움직임을 감지하고 알림을 주는 웹앱" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="찌봄" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="styles.css" />
+  <title>찌봄 — 스마트 찌 감지</title>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="찌봄 홈">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32"><path d="M16 3v8"/><path d="M12.5 8.5h7L18 19h-4z"/><path d="M9 23c2.2-1.6 4.5-1.6 7 0s4.8 1.6 7 0"/></svg>
+        </span>
+        <span><strong>찌봄</strong><small>스마트 찌 감지</small></span>
+      </a>
+      <div class="top-actions">
+        <button id="installBtn" class="icon-btn hidden" type="button" aria-label="앱 설치" title="앱 설치">
+          <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg>
+        </button>
+        <button id="helpBtn" class="icon-btn" type="button" aria-label="사용법" title="사용법">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.4 2.4 0 1 1 3.3 2.2c-.8.4-1.1.9-1.1 1.8M12 17h.01"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div>
+          <span class="eyebrow">CAMERA BITE ALERT</span>
+          <h1>찌는 앱이 보고,<br /><em>입질은 바로 알려줘요.</em></h1>
+          <p>폰을 고정하고 찌를 한 번 터치하세요. 움직임이 커지면 소리와 진동으로 알려줍니다.</p>
+        </div>
+        <div class="hero-badge" aria-label="온디바이스 처리">
+          <svg viewBox="0 0 24 24"><path d="M12 2 4.5 5v5.4c0 5 3 9.4 7.5 11.1 4.5-1.7 7.5-6.1 7.5-11.1V5z"/><path d="m9 12 2 2 4-4"/></svg>
+          <span><strong>영상 전송 없음</strong><small>폰 안에서 분석</small></span>
+        </div>
+      </section>
+
+      <section class="camera-card" aria-labelledby="cameraTitle">
+        <div class="section-heading camera-heading">
+          <div>
+            <span class="step-chip">01</span>
+            <div>
+              <h2 id="cameraTitle">카메라 감시</h2>
+              <p id="stateText">카메라를 켜고 찌를 선택하세요.</p>
+            </div>
+          </div>
+          <div class="status-pill" id="statusPill" data-status="idle">
+            <span class="status-dot"></span>
+            <span id="statusLabel">대기</span>
+          </div>
+        </div>
+
+        <div class="camera-stage" id="cameraStage">
+          <video id="camera" autoplay muted playsinline aria-label="카메라 영상"></video>
+          <canvas id="overlay" aria-label="찌 추적 표시"></canvas>
+          <canvas id="analysisCanvas" class="hidden-canvas" aria-hidden="true"></canvas>
+          <canvas id="demoCanvas" class="hidden-canvas" aria-hidden="true"></canvas>
+
+          <div class="camera-empty" id="cameraEmpty">
+            <div class="empty-illustration" aria-hidden="true">
+              <div class="scan-corners"></div>
+              <div class="float-illustration"><i></i><b></b></div>
+              <div class="water-lines"><i></i><i></i><i></i></div>
+            </div>
+            <h3>먼저 카메라를 켜주세요</h3>
+            <p>실제 카메라 또는 데모 영상으로 바로 시험할 수 있어요.</p>
+            <div class="empty-actions">
+              <button id="startCameraBtn" class="btn primary" type="button">
+                <svg viewBox="0 0 24 24"><path d="M14.5 6 13 4H7L5.5 6H3v13h18V6z"/><circle cx="12" cy="12.5" r="4"/></svg>
+                카메라 켜기
+              </button>
+              <button id="startDemoBtn" class="btn secondary" type="button">
+                <svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/><circle cx="12" cy="12" r="10"/></svg>
+                데모 체험
+              </button>
+            </div>
+          </div>
+
+          <div class="tap-guide hidden" id="tapGuide">
+            <span class="tap-ripple"></span>
+            <strong>화면의 찌 끝을 터치하세요</strong>
+            <small>밝고 선명한 부분을 선택하면 더 잘 찾아요</small>
+          </div>
+
+          <div class="calibration-panel hidden" id="calibrationPanel">
+            <div class="spinner"></div>
+            <div><strong>물결을 배우는 중</strong><small id="calibrationText">폰을 움직이지 말아주세요 · 0%</small></div>
+          </div>
+
+          <div class="camera-hud hidden" id="cameraHud">
+            <div class="hud-item"><span>추적</span><strong id="confidenceText">—</strong></div>
+            <div class="hud-item"><span>프레임</span><strong id="fpsText">—</strong></div>
+            <div class="hud-item"><span>화면</span><strong id="wakeText">켜짐</strong></div>
+          </div>
+
+          <button id="flipCameraBtn" class="floating-icon top-left hidden" type="button" aria-label="카메라 전환" title="카메라 전환">
+            <svg viewBox="0 0 24 24"><path d="M4 7h3l2-2h6l2 2h3v11H4z"/><path d="m9 11-2 2 2 2m6-4 2 2-2 2"/></svg>
+          </button>
+
+          <button id="resetTargetBtn" class="floating-action top-right hidden" type="button">
+            <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+            찌 다시 선택
+          </button>
+
+          <div class="alarm-layer hidden" id="alarmLayer" role="alert" aria-live="assertive">
+            <div class="alarm-rings"><i></i><i></i><i></i></div>
+            <span class="alarm-kicker">BITE DETECTED</span>
+            <h2 id="alarmTitle">입질 감지!</h2>
+            <p id="alarmReason">찌가 빠르게 움직였어요.</p>
+            <div class="alarm-score"><span>감지 강도</span><strong id="alarmScore">92</strong></div>
+            <button id="stopAlarmBtn" class="btn alarm-stop" type="button">알람 멈추기</button>
+          </div>
+        </div>
+
+        <div class="camera-toolbar">
+          <div class="color-target">
+            <span id="targetSwatch" class="target-swatch"></span>
+            <span><small>선택한 찌 색</small><strong id="targetColorText">아직 없음</strong></span>
+          </div>
+          <div class="toolbar-actions">
+            <button id="stopCameraBtn" class="text-btn hidden" type="button">카메라 끄기</button>
+            <button id="monitorBtn" class="btn primary monitor-btn" type="button" disabled>
+              <span class="record-dot"></span>
+              감시 시작
+            </button>
+          </div>
+        </div>
+
+        <div class="demo-controls hidden" id="demoControls">
+          <span>데모 입질</span>
+          <button type="button" data-demo-bite="sink">푹 잠김</button>
+          <button type="button" data-demo-bite="lift">쑥 올라옴</button>
+          <button type="button" data-demo-bite="twitch">토독 떨림</button>
+        </div>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="metric-card movement-card">
+          <div class="card-title-row">
+            <div>
+              <span class="step-chip">02</span>
+              <div><h2>실시간 움직임</h2><p>잔물결과 입질을 나눠서 봅니다.</p></div>
+            </div>
+            <span class="live-tag"><i></i> LIVE</span>
+          </div>
+          <div class="movement-summary">
+            <div class="gauge" id="motionGauge" style="--value: 0">
+              <div><strong id="motionScore">0</strong><small>감지 강도</small></div>
+            </div>
+            <div class="movement-stats">
+              <div><span>상하 이동</span><strong id="verticalMove">0.0</strong><small>px</small></div>
+              <div><span>추적 신뢰도</span><strong id="confidenceMetric">0</strong><small>%</small></div>
+              <div><span>찌 보임</span><strong id="areaMetric">0</strong><small>%</small></div>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="motionChart" aria-label="찌 움직임 그래프"></canvas>
+            <div class="chart-label top">위</div>
+            <div class="chart-label bottom">아래</div>
+          </div>
+        </article>
+
+        <article class="settings-card">
+          <div class="card-title-row compact">
+            <div>
+              <span class="step-chip">03</span>
+              <div><h2>감지 설정</h2><p>낚시터 상황에 맞게 조절하세요.</p></div>
+            </div>
+          </div>
+
+          <label class="field-group">
+            <span class="field-label"><strong>민감도</strong><output id="sensitivityOutput">보통 6</output></span>
+            <input id="sensitivity" type="range" min="1" max="10" value="6" />
+            <span class="range-labels"><i>파도 큼</i><i>작은 입질</i></span>
+          </label>
+
+          <label class="field-group">
+            <span class="field-label"><strong>주요 입질 패턴</strong></span>
+            <select id="detectMode">
+              <option value="balanced">균형 모드 · 하강/상승/떨림</option>
+              <option value="sink">잠김 중심 · 찌가 내려갈 때</option>
+              <option value="lift">올림 중심 · 찌가 올라올 때</option>
+              <option value="twitch">떨림 중심 · 토독거릴 때</option>
+            </select>
+          </label>
+
+          <div class="toggle-list">
+            <label class="toggle-row">
+              <span><strong>야간 LED 모드</strong><small>어두운 화면에서 밝은 찌를 우선 추적</small></span>
+              <input id="nightMode" type="checkbox" /><i></i>
+            </label>
+            <label class="toggle-row">
+              <span><strong>알람 소리</strong><small>입질이 오면 세 번 울림</small></span>
+              <input id="soundEnabled" type="checkbox" checked /><i></i>
+            </label>
+            <label class="toggle-row">
+              <span><strong>진동 알림</strong><small>지원되는 휴대폰에서 작동</small></span>
+              <input id="vibrationEnabled" type="checkbox" checked /><i></i>
+            </label>
+            <label class="toggle-row">
+              <span><strong>파도 자동 보정</strong><small>평소 흔들림을 천천히 기준에 반영</small></span>
+              <input id="waveCorrection" type="checkbox" checked /><i></i>
+            </label>
+          </div>
+
+          <details class="advanced-settings">
+            <summary>고급 설정</summary>
+            <label class="field-group">
+              <span class="field-label"><strong>색상 허용 범위</strong><output id="toleranceOutput">28</output></span>
+              <input id="colorTolerance" type="range" min="10" max="55" value="28" />
+              <span class="range-labels"><i>정확하게</i><i>넓게 찾기</i></span>
+            </label>
+          </details>
+        </article>
+      </section>
+
+      <section class="history-card">
+        <div class="card-title-row">
+          <div>
+            <span class="step-chip">04</span>
+            <div><h2>입질 기록</h2><p>감지 결과를 알려주면 다음 판단에 참고할 수 있어요.</p></div>
+          </div>
+          <button id="clearHistoryBtn" class="text-btn" type="button">기록 지우기</button>
+        </div>
+        <div id="historyList" class="history-list">
+          <div class="history-empty">
+            <svg viewBox="0 0 24 24"><path d="M4 4v16h16V8l-4-4z"/><path d="M8 13h8M8 17h5M15 4v5h5"/></svg>
+            <strong>아직 감지 기록이 없어요</strong>
+            <span>입질을 찾으면 시간과 움직임 종류를 남겨드려요.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="field-tips">
+        <div>
+          <span class="tip-icon">1</span>
+          <p><strong>폰을 단단히 고정</strong><br />삼각대나 거치대를 쓰면 오작동이 크게 줄어요.</p>
+        </div>
+        <div>
+          <span class="tip-icon">2</span>
+          <p><strong>찌 끝을 크게 보이게</strong><br />카메라 화면에서 찌가 8픽셀 이상이면 좋아요.</p>
+        </div>
+        <div>
+          <span class="tip-icon">3</span>
+          <p><strong>실전 보조 도구</strong><br />알림만 믿지 말고 낚싯대와 주변 상황도 확인하세요.</p>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <strong>찌봄 MVP</strong>
+      <span>카메라 영상은 서버로 전송하거나 저장하지 않습니다.</span>
+    </footer>
+  </div>
+
+  <div class="modal-backdrop hidden" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+    <div class="modal">
+      <button class="modal-close" id="closeHelpBtn" type="button" aria-label="닫기">×</button>
+      <span class="eyebrow">사용 방법</span>
+      <h2 id="helpTitle">세 단계면 준비 끝 🎣</h2>
+      <ol class="how-list">
+        <li><span>1</span><div><strong>폰을 고정하고 카메라 켜기</strong><p>화면이 흔들리지 않게 거치대에 단단히 고정하세요.</p></div></li>
+        <li><span>2</span><div><strong>찌 끝의 선명한 색 터치</strong><p>빨강·주황·형광색처럼 주변과 다른 곳이 좋아요.</p></div></li>
+        <li><span>3</span><div><strong>보정 후 감시 시작</strong><p>평소 물결을 잠깐 배운 뒤 알람을 준비합니다.</p></div></li>
+      </ol>
+      <div class="notice-box"><strong>카메라가 안 켜지나요?</strong><p>실제 폰에서는 HTTPS 주소 또는 localhost에서 열고 브라우저의 카메라 권한을 허용해야 합니다.</p></div>
+      <button id="helpOkayBtn" class="btn primary full" type="button">알겠어요</button>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="feedbackModal" role="dialog" aria-modal="true" aria-labelledby="feedbackTitle">
+    <div class="modal feedback-modal">
+      <span class="feedback-icon">🎣</span>
+      <h2 id="feedbackTitle">이번 알림은 맞았나요?</h2>
+      <p>한 번 눌러주면 기록에 표시됩니다.</p>
+      <div class="feedback-actions">
+        <button id="feedbackTrueBtn" class="btn success" type="button">맞아요, 입질이에요</button>
+        <button id="feedbackFalseBtn" class="btn secondary" type="button">아니에요, 오탐이에요</button>
+      </div>
+      <button id="feedbackSkipBtn" class="text-btn" type="button">나중에 표시</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <script src="app.js" defer></script>
+</body>
+</html>

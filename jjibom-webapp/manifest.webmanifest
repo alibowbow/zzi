@@ -1,0 +1,17 @@
+{
+  "name": "찌봄 - 스마트 찌 감지",
+  "short_name": "찌봄",
+  "description": "스마트폰 카메라로 낚시찌 움직임을 감지하고 알림을 주는 웹앱",
+  "lang": "ko-KR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#07141d",
+  "theme_color": "#07141d",
+  "categories": ["sports", "utilities"],
+  "icons": [
+    {"src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}
