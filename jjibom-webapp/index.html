@@ -33,9 +33,9 @@
     <main id="top">
       <section class="hero">
         <div>
-          <span class="eyebrow">CAMERA BITE ALERT</span>
+          <span class="eyebrow">SMART BITE ALERT</span>
           <h1>찌는 앱이 보고,<br /><em>입질은 바로 알려줘요.</em></h1>
-          <p>폰을 고정하고 찌를 한 번 터치하세요. 움직임이 커지면 소리와 진동으로 알려줍니다.</p>
+          <p>카메라로 찌를 보거나, 폰을 낚싯대에 고정해 떨림으로 감지해요. 입질이 오면 소리와 진동으로 알려줍니다.</p>
         </div>
         <div class="hero-badge" aria-label="온디바이스 처리">
           <svg viewBox="0 0 24 24"><path d="M12 2 4.5 5v5.4c0 5 3 9.4 7.5 11.1 4.5-1.7 7.5-6.1 7.5-11.1V5z"/><path d="m9 12 2 2 4-4"/></svg>
@@ -410,21 +410,51 @@
 
     <footer>
       <strong>찌봄 MVP</strong>
-      <span>카메라 영상은 서버로 전송하거나 저장하지 않습니다.</span>
+      <span>영상·센서 데이터는 서버로 전송하거나 저장하지 않습니다.</span>
     </footer>
   </div>
 
   <div class="modal-backdrop hidden" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
-    <div class="modal">
+    <div class="modal help-modal">
       <button class="modal-close" id="closeHelpBtn" type="button" aria-label="닫기">×</button>
-      <span class="eyebrow">사용 방법</span>
-      <h2 id="helpTitle">세 단계면 준비 끝 🎣</h2>
-      <ol class="how-list">
-        <li><span>1</span><div><strong>폰을 고정하고 카메라 켜기</strong><p>화면이 흔들리지 않게 거치대에 단단히 고정하세요.</p></div></li>
-        <li><span>2</span><div><strong>찌 끝의 선명한 색 터치</strong><p>빨강·주황·형광색처럼 주변과 다른 곳이 좋아요.</p></div></li>
-        <li><span>3</span><div><strong>보정 후 감시 시작</strong><p>평소 물결을 잠깐 배운 뒤 알람을 준비합니다.</p></div></li>
-      </ol>
-      <div class="notice-box"><strong>카메라가 안 켜지나요?</strong><p>실제 폰에서는 HTTPS 주소 또는 localhost에서 열고 브라우저의 카메라 권한을 허용해야 합니다.</p></div>
+      <span class="eyebrow">사용 설명서</span>
+      <h2 id="helpTitle">찌봄 사용법 🎣</h2>
+      <p class="help-intro">두 가지 방식으로 입질을 알려줘요. 홈 화면 위쪽에서 방식을 고르세요. 영상·센서 데이터는 서버로 보내지 않고 폰 안에서만 처리해요.</p>
+
+      <section class="help-section">
+        <div class="help-head"><span class="help-ico cam">📷</span><div><strong>① 카메라 감지</strong><small>찌가 화면에 잘 보이고 폰을 거치할 수 있을 때</small></div></div>
+        <ol class="how-list">
+          <li><span>1</span><div><strong>폰 고정 + 카메라 켜기</strong><p>거치대·삼각대로 흔들리지 않게 고정하고 ‘카메라 켜기’를 누르세요.</p></div></li>
+          <li><span>2</span><div><strong>찌 끝 터치</strong><p>빨강·주황·형광색처럼 또렷한 부분을 누르면 추적을 시작해요. 설정에서 ‘여러 찌 동시 선택’을 켜면 화면을 여러 번 터치해 최대 4개까지 감시할 수 있어요.</p></div></li>
+          <li><span>3</span><div><strong>보정 후 감시 시작</strong><p>2~3초 평소 물결을 배운 뒤 ‘감시 시작’을 눌러요. 잠깐 놓쳐도 입질로 오인하지 않아요.</p></div></li>
+        </ol>
+      </section>
+
+      <section class="help-section">
+        <div class="help-head"><span class="help-ico vib">📳</span><div><strong>② 진동 감지</strong><small>폰을 낚싯대에 고정할 때 · 카메라 불필요</small></div></div>
+        <ol class="how-list">
+          <li><span>1</span><div><strong>낚싯대에 폰 고정</strong><p>컵홀더·거치대·커플러로 단단히 고정하세요. 물에 빠지지 않게 안전줄을 권장해요.</p></div></li>
+          <li><span>2</span><div><strong>보정 시작</strong><p>낚싯대를 건드리지 말고 5~8초 기다려요. 평소 흔들림을 기준으로 배워요.</p></div></li>
+          <li><span>3</span><div><strong>감시 + 알람 시험</strong><p>보정이 끝나면 자동으로 감시해요. 강한 당김·토독·반복 진동을 구분해 알려주고, 폰을 건드리면 입질이 아니라 ‘재안정화’로 처리해요.</p></div></li>
+        </ol>
+        <div class="help-note">웹/브라우저 버전은 화면이 켜져 있을 때만 감시돼요. 다른 앱을 쓰거나 화면을 끄면 멈춥니다. 백그라운드(화면 꺼짐) 감시는 안드로이드 설치형 앱에서만 가능해요.</div>
+      </section>
+
+      <section class="help-section">
+        <div class="help-head"><span class="help-ico tip">💡</span><div><strong>잘 잡으려면</strong></div></div>
+        <ul class="help-tips">
+          <li>폰·거치대를 단단히 고정할수록 오작동이 크게 줄어요.</li>
+          <li>민감도는 ‘보통’에서 시작해 상황에 맞게 조절하세요.</li>
+          <li>카메라는 찌가 작으면 줌으로 키우고, 진동은 거치를 더 단단히.</li>
+          <li>카메라·센서 없이 ‘데모’ 버튼으로 미리 연습할 수 있어요.</li>
+          <li>알림은 보조 도구예요. 낚싯대와 주변 상황도 함께 확인하세요.</li>
+        </ul>
+      </section>
+
+      <div class="notice-box">
+        <strong>잘 안 되나요?</strong>
+        <p>· 카메라·센서는 HTTPS 주소(또는 localhost)에서 권한을 허용해야 써요.<br />· 새로고침해도 옛 화면이면 하단 ‘새 버전 새로고침’을 눌러요.<br />· iPhone에서는 화면이 켜져 있을 때만 시험 지원하고, 진동·화면꺼짐 알림은 제한될 수 있어요.</p>
+      </div>
       <button id="helpOkayBtn" class="btn primary full" type="button">알겠어요</button>
     </div>
   </div>

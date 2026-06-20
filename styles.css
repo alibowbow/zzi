@@ -1,0 +1,16 @@
+
+/* ===== Upgraded help manual ===== */
+.help-modal { max-height: 86vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.help-modal h2 { margin-bottom: 8px; }
+.help-intro { margin: 0 0 18px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.help-section { padding: 14px 0; border-top: 1px solid var(--line); }
+.help-section:first-of-type { border-top: 0; padding-top: 4px; }
+.help-head { display: flex; align-items: center; gap: 11px; margin-bottom: 12px; }
+.help-ico { width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 11px; font-size: 17px; background: var(--mint-soft); border: 1px solid rgba(66,237,196,.16); }
+.help-ico.vib { background: rgba(98,201,255,.1); border-color: rgba(98,201,255,.18); }
+.help-ico.tip { background: rgba(255,219,117,.1); border-color: rgba(255,219,117,.18); }
+.help-head strong { font-size: 13px; }
+.help-head small { display: block; color: var(--muted); font-size: 10px; margin-top: 2px; }
+.help-note { margin-top: 10px; padding: 11px 13px; border-radius: 12px; font-size: 10px; line-height: 1.55; color: var(--cyan); background: rgba(98,201,255,.07); border: 1px solid rgba(98,201,255,.16); }
+.help-tips { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.help-tips li { color: var(--muted); font-size: 11px; line-height: 1.5; }

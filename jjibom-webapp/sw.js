@@ -4,7 +4,7 @@
 
 // Bump CACHE_VERSION on every deploy so the old app shell is dropped on
 // activate. The "v" number is the single source of truth for cache busting.
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v5';
 const CACHE_PREFIX = 'jjibom-';
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 
