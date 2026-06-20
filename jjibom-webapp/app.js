@@ -13,6 +13,11 @@ import { AlarmController } from './src/alarm.js';
 import { storage, loadJson, saveJson, downloadJson } from './src/storage.js';
 import { DemoScene } from './src/demo.js';
 import { ANALYSIS_MAX, PROCESS_INTERVAL_MS, CALIBRATION_FRAMES, SHAKE } from './src/config.js';
+import { MotionController } from './src/motionController.js';
+import { MotionState, MotionStateLabel } from './src/motionState.js';
+import { MOTION_SCENARIOS, generateScenario, DEMO_BASELINE } from './src/motionScenarios.js';
+import { isNativeAvailable, platform } from './src/nativeBridge.js';
+import { MOTION } from './src/motionConfig.js';
 
 const HISTORY_KEY = 'jjibom-history-v1';
 const SETTINGS_KEY = 'jjibom-settings-v1';
@@ -43,7 +48,16 @@ const els = {};
   'feedbackTrueBtn', 'feedbackFalseBtn', 'feedbackSkipBtn', 'toast',
   'cameraSelect', 'zoomControl', 'zoomRange', 'diagPanel', 'diagState', 'diagConfidence',
   'diagPos', 'diagCorrectedDy', 'diagBgDy', 'diagFloatHeight', 'diagCurHeight',
-  'diagAreaRatio', 'diagBiteScore', 'diagFps', 'diagExportBtn', 'updateBanner', 'reloadBtn'
+  'diagAreaRatio', 'diagBiteScore', 'diagFps', 'diagExportBtn', 'updateBanner', 'reloadBtn',
+  // motion mode
+  'modeCameraBtn', 'modeMotionBtn', 'motionModeBadge', 'cameraMode', 'motionMode',
+  'motionStateText', 'motionStatusPill', 'motionStatusLabel', 'motionElapsed', 'motionBackground',
+  'motionBattery', 'motionGaugeBig', 'motionScoreBig', 'motionBandText', 'motionBarFill', 'motionMagnitude',
+  'motionCalibPanel', 'motionCalibText', 'motionCalibrateBtn', 'motionStartBtn', 'motionTestAlarmBtn',
+  'motionStopBtn', 'motionBgNote', 'motionDemoControls', 'motionSensitivity', 'motionSensOut',
+  'motionPresets', 'motionPattern', 'motionSound', 'motionVibration', 'motionKeepAwake', 'motionDark',
+  'motionExportBtn', 'motionGuide', 'checkInstallBtn', 'checkSensorBtn', 'motionAlarmModal',
+  'motionAlarmTitle', 'motionAlarmReason', 'motionAlarmScore', 'motionAlarmStop'
 ].forEach((id) => { els[id] = $(id); });
 
 const analysisCtx = els.analysisCanvas.getContext('2d', { willReadFrequently: true });
@@ -53,6 +67,17 @@ const chartCtx = els.motionChart.getContext('2d');
 const cameraCtl = new CameraController(els.camera);
 const alarmCtl = new AlarmController();
 const demo = new DemoScene();
+
+// --- Motion (vibration) mode ----------------------------------------------
+const MOTION_SETTINGS_KEY = 'jjibom-motion-v1';
+const MOTION_EVENTS_KEY = 'jjibom-motion-events-v1';
+const MODE_KEY = 'jjibom-mode-v1';
+let appMode = 'camera';
+let motionBaselineReady = false;
+let lastMotionExport = null;
+const motionSettings = Object.assign({
+  sensitivity: 5, detectMode: 'all', sound: true, vibration: true, keepAwake: true, dark: false
+}, loadJson(MOTION_SETTINGS_KEY, {}));
 
 // --- Mutable app state ----------------------------------------------------
 let phase = PHASE.IDLE;
@@ -1033,6 +1058,271 @@ function showUpdateBanner(registration) {
 }
 
 // ==========================================================================
+// Motion (vibration) mode
+// ==========================================================================
+const motionCtl = new MotionController({
+  alarm: alarmCtl,
+  callbacks: {
+    onState: motionOnState,
+    onCalibrationProgress: (p) => { if (els.motionCalibText) els.motionCalibText.textContent = `낚싯대와 폰을 건드리지 마세요 · ${Math.round(p * 100)}%`; },
+    onCalibrationDone: motionOnCalibrationDone,
+    onCalibrationFail: motionOnCalibrationFail,
+    onMonitorStart: () => { motionWakeLock(true); },
+    onMetrics: motionOnMetrics,
+    onAlarm: motionOnAlarm,
+    onError: motionOnError,
+    onBackgroundPause: () => showToast('웹 버전에서는 화면을 벗어나면 감시가 일시 중지돼요.', 3500),
+    onResumePrompt: motionOnResume,
+    onTestAlarm: () => showToast('알람을 시험하고 있어요.')
+  }
+});
+
+function setupMotion() {
+  els.modeCameraBtn?.addEventListener('click', () => switchMode('camera'));
+  els.modeMotionBtn?.addEventListener('click', () => switchMode('motion'));
+  applyMotionSettingsToUi();
+
+  if (els.motionDemoControls) {
+    MOTION_SCENARIOS.forEach((sc) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.scene = sc.id;
+      b.textContent = sc.label;
+      els.motionDemoControls.appendChild(b);
+    });
+    els.motionDemoControls.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-scene]');
+      if (!btn) return;
+      const { samples, loop } = generateScenario(btn.dataset.scene);
+      motionCtl.setSettings(motionSettings);
+      motionCtl.playScenario(samples, loop, DEMO_BASELINE);
+      motionBaselineReady = true;
+      if (els.motionStartBtn) els.motionStartBtn.disabled = false;
+      showToast(`데모: ${btn.textContent} (고정 기준으로 감시)`);
+    });
+  }
+
+  els.motionCalibrateBtn?.addEventListener('click', motionStartCalibration);
+  els.motionStartBtn?.addEventListener('click', () => {
+    if (!motionBaselineReady) return;
+    motionCtl.setSettings(motionSettings);
+    motionCtl.rearm();
+    motionWakeLock(true);
+  });
+  els.motionTestAlarmBtn?.addEventListener('click', () => motionCtl.testAlarm());
+  els.motionStopBtn?.addEventListener('click', motionStopMonitoring);
+  els.checkInstallBtn?.addEventListener('click', motionCheckInstall);
+  els.checkSensorBtn?.addEventListener('click', motionCheckSensor);
+
+  els.motionSensitivity?.addEventListener('input', () => setMotionSensitivity(Number(els.motionSensitivity.value), true));
+  els.motionPresets?.addEventListener('click', (e) => { const b = e.target.closest('[data-preset]'); if (b) setMotionSensitivity(Number(b.dataset.preset), false); });
+  els.motionPattern?.addEventListener('change', () => { motionSettings.detectMode = els.motionPattern.value; saveMotionSettings(); motionCtl.setSettings(motionSettings); });
+  els.motionSound?.addEventListener('change', () => { motionSettings.sound = els.motionSound.checked; saveMotionSettings(); motionCtl.setSettings(motionSettings); if (motionSettings.sound) alarmCtl.ensureAudio(); });
+  els.motionVibration?.addEventListener('change', () => { motionSettings.vibration = els.motionVibration.checked; saveMotionSettings(); motionCtl.setSettings(motionSettings); });
+  els.motionKeepAwake?.addEventListener('change', () => { motionSettings.keepAwake = els.motionKeepAwake.checked; saveMotionSettings(); motionWakeLock(motionCtl.getState() === MotionState.ARMED); });
+  els.motionDark?.addEventListener('change', () => { motionSettings.dark = els.motionDark.checked; saveMotionSettings(); applyDark(); });
+  els.motionExportBtn?.addEventListener('click', motionExport);
+
+  els.motionAlarmStop?.addEventListener('click', () => { motionCtl.dismissAlarm(); hideModal(els.motionAlarmModal); });
+  els.motionAlarmModal?.addEventListener('click', (e) => {
+    const fb = e.target.closest('[data-mlabel]');
+    if (fb) { motionLabelLast(fb.dataset.mlabel); motionCtl.dismissAlarm(); hideModal(els.motionAlarmModal); }
+  });
+
+  document.addEventListener('visibilitychange', () => { if (appMode === 'motion') motionCtl.onVisibilityChange(); });
+  updateMotionAvailabilityUi();
+  applyDark();
+}
+
+function switchMode(mode) {
+  if (mode === appMode) return;
+  if (mode === 'motion') { if (cameraCtl.isActive) stopEverything(true); }
+  else { motionStopMonitoring(); }
+  appMode = mode;
+  storage.setItem(MODE_KEY, mode);
+  els.cameraMode?.classList.toggle('hidden', mode !== 'camera');
+  els.motionMode?.classList.toggle('hidden', mode !== 'motion');
+  els.modeCameraBtn?.classList.toggle('active', mode === 'camera');
+  els.modeMotionBtn?.classList.toggle('active', mode === 'motion');
+  els.modeCameraBtn?.setAttribute('aria-pressed', String(mode === 'camera'));
+  els.modeMotionBtn?.setAttribute('aria-pressed', String(mode === 'motion'));
+  if (mode === 'motion') updateMotionAvailabilityUi();
+  applyDark();
+}
+
+function applyMotionSettingsToUi() {
+  if (els.motionSensitivity) els.motionSensitivity.value = motionSettings.sensitivity;
+  if (els.motionPattern) els.motionPattern.value = motionSettings.detectMode;
+  if (els.motionSound) els.motionSound.checked = motionSettings.sound;
+  if (els.motionVibration) els.motionVibration.checked = motionSettings.vibration;
+  if (els.motionKeepAwake) els.motionKeepAwake.checked = motionSettings.keepAwake;
+  if (els.motionDark) els.motionDark.checked = motionSettings.dark;
+  updateMotionSensLabel();
+  highlightPreset();
+}
+
+function saveMotionSettings() { saveJson(MOTION_SETTINGS_KEY, motionSettings); }
+
+function setMotionSensitivity(value, fromSlider) {
+  motionSettings.sensitivity = clamp(value, 1, 10);
+  if (!fromSlider && els.motionSensitivity) els.motionSensitivity.value = motionSettings.sensitivity;
+  updateMotionSensLabel();
+  highlightPreset();
+  saveMotionSettings();
+  motionCtl.setSettings(motionSettings);
+}
+
+function updateMotionSensLabel() {
+  const v = Number(motionSettings.sensitivity);
+  const label = v <= 3 ? '둔감' : v <= 7 ? '보통' : '민감';
+  if (els.motionSensOut) els.motionSensOut.textContent = `${label} ${v}`;
+}
+
+function highlightPreset() {
+  els.motionPresets?.querySelectorAll('[data-preset]').forEach((b) => {
+    b.classList.toggle('active', Number(b.dataset.preset) === Number(motionSettings.sensitivity));
+  });
+}
+
+async function motionStartCalibration() {
+  if (!motionCtl.isSupported()) { showToast('이 기기에서는 동작 센서를 사용할 수 없어요.', 4000); return; }
+  if (!window.isSecureContext && location.hostname !== 'localhost') { showToast('센서 사용에는 HTTPS 연결이 필요해요.', 4000); return; }
+  await alarmCtl.ensureAudio();
+  motionCtl.setSettings(motionSettings);
+  motionBaselineReady = false;
+  if (els.motionStartBtn) els.motionStartBtn.disabled = true;
+  motionCtl.startCalibration();
+}
+
+function motionStopMonitoring() {
+  motionCtl.stop();
+  motionWakeLock(false);
+  hideModal(els.motionAlarmModal);
+}
+
+function motionWakeLock(active) {
+  if (active && motionSettings.keepAwake) alarmCtl.requestWakeLock();
+  else if (!active) alarmCtl.releaseWakeLock();
+}
+
+function applyDark() {
+  document.body.classList.toggle('motion-dark', Boolean(motionSettings.dark && appMode === 'motion'));
+}
+
+function motionOnState(state) {
+  if (els.motionStatusPill) els.motionStatusPill.dataset.status = state;
+  if (els.motionStatusLabel) els.motionStatusLabel.textContent = MotionStateLabel[state] || state;
+  els.motionCalibPanel?.classList.toggle('hidden', state !== MotionState.CALIBRATING);
+  const text = {
+    [MotionState.IDLE]: '낚싯대에 폰을 고정하고 보정을 시작하세요.',
+    [MotionState.CALIBRATING]: '평소 흔들림을 배우고 있어요.',
+    [MotionState.ARMED]: '낚싯대의 떨림을 감시하고 있어요.',
+    [MotionState.POSSIBLE_BITE]: '큰 흔들림을 살펴보는 중…',
+    [MotionState.STABILIZING]: '폰이 움직였어요. 다시 안정화 중…',
+    [MotionState.PAUSED]: '화면을 벗어나 감시가 멈췄어요.',
+    [MotionState.ERROR]: '센서 신호가 끊겼어요. 다시 시도해 주세요.',
+    [MotionState.COOLDOWN]: '방금 입질 후 잠시 대기 중이에요.'
+  }[state];
+  if (text && els.motionStateText) els.motionStateText.textContent = text;
+}
+
+function motionOnCalibrationDone() {
+  motionBaselineReady = true;
+  els.motionCalibPanel?.classList.add('hidden');
+  if (els.motionStartBtn) els.motionStartBtn.disabled = false;
+  showToast('보정 완료! 진동 감시를 시작했어요.');
+}
+
+function motionOnCalibrationFail(reason) {
+  els.motionCalibPanel?.classList.add('hidden');
+  showToast(reason || '보정에 실패했어요. 다시 시도해 주세요.', 4200);
+}
+
+function motionOnMetrics(m) {
+  const score = Math.round(m.score || 0);
+  if (els.motionGaugeBig) els.motionGaugeBig.style.setProperty('--value', score);
+  if (els.motionScoreBig) els.motionScoreBig.textContent = score;
+  if (els.motionBandText) els.motionBandText.textContent = { stable: '안정', wobble: '작은 흔들림', possible: '입질 가능성', bite: '입질 감지' }[m.band] || '안정';
+  if (els.motionBarFill) els.motionBarFill.style.width = `${score}%`;
+  if (els.motionMagnitude) els.motionMagnitude.textContent = (m.magnitude || 0).toFixed(2);
+  if (els.motionElapsed && m.elapsedMs != null) {
+    const s = Math.max(0, Math.floor(m.elapsedMs / 1000));
+    els.motionElapsed.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+}
+
+function motionOnAlarm(alarm, exportData) {
+  lastMotionExport = exportData;
+  const patternLabel = { strong_pull: '강한 당김', tap: '토독 입질', repeated: '반복 입질' }[alarm.pattern] || '입질';
+  if (els.motionAlarmTitle) els.motionAlarmTitle.textContent = `${patternLabel} 감지!`;
+  if (els.motionAlarmReason) els.motionAlarmReason.textContent = '낚싯대에서 입질로 보이는 움직임이 감지됐어요.';
+  if (els.motionAlarmScore) els.motionAlarmScore.textContent = Math.round(alarm.score || 0);
+  const record = { id: Date.now(), timestamp: alarm.timestamp || new Date().toISOString(), reason: `진동 · ${patternLabel}`, type: alarm.pattern, score: Math.round(alarm.score || 0), feedback: null, mode: 'motion' };
+  history.unshift(record);
+  history = history.slice(0, 30);
+  saveJson(HISTORY_KEY, history);
+  renderHistory();
+  if (exportData) {
+    const events = loadJson(MOTION_EVENTS_KEY, []);
+    events.unshift({ ...exportData, id: record.id });
+    saveJson(MOTION_EVENTS_KEY, events.slice(0, 50));
+  }
+  showModal(els.motionAlarmModal);
+}
+
+function motionLabelLast(label) {
+  const events = loadJson(MOTION_EVENTS_KEY, []);
+  if (events.length) { events[0].userLabel = label; saveJson(MOTION_EVENTS_KEY, events); }
+  if (lastMotionExport) lastMotionExport.userLabel = label;
+  showToast(label === 'true_positive' ? '입질로 기록했어요.' : label === 'false_positive' ? '오탐으로 기록했어요.' : '기록했어요.');
+}
+
+function motionOnError(reason) {
+  if (reason === 'permission') showToast('동작 센서 권한이 필요해요. 권한을 허용해 주세요.', 4200);
+  else if (reason === 'stall') showToast('센서 신호가 끊겼어요. 폰 고정과 권한을 확인해 주세요.', 4000);
+}
+
+function motionOnResume() {
+  showToast('화면이 다시 켜졌어요. 감시를 이어갑니다.', 3000);
+  motionCtl.resume();
+}
+
+function motionCheckInstall() {
+  if (isNativeAvailable()) showToast('설치형 앱이에요. 백그라운드 감시를 사용할 수 있어요.', 3500);
+  else showToast(`현재 ${platform()} 환경이에요. 백그라운드 감시는 안드로이드 설치형 앱에서만 가능해요.`, 4500);
+}
+
+function motionCheckSensor() {
+  if (!motionCtl.isSupported()) { showToast('이 기기/브라우저는 동작 센서를 지원하지 않아요.', 4000); return; }
+  showToast('동작 센서를 사용할 수 있어요. 보정을 시작해 보세요.', 3000);
+}
+
+function motionExport() {
+  if (!lastMotionExport) { showToast('내보낼 이벤트가 아직 없어요.'); return; }
+  const name = `jjibom-motion-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  if (downloadJson(name, lastMotionExport)) showToast('이벤트 데이터를 내보냈어요.');
+  else showToast('내보내기를 지원하지 않는 환경이에요.');
+}
+
+function updateMotionAvailabilityUi() {
+  const native = isNativeAvailable();
+  if (els.motionModeBadge) {
+    els.motionModeBadge.textContent = native ? '다른 앱 사용 중에도 감시 가능' : '화면을 켠 상태에서 사용';
+    els.motionModeBadge.classList.toggle('native', native);
+  }
+  if (els.motionBackground) els.motionBackground.textContent = native ? '가능 (앱)' : '웹: 불가';
+  if (els.motionBgNote) {
+    els.motionBgNote.textContent = native
+      ? '설치형 앱: 다른 앱을 열거나 화면을 꺼도 백그라운드에서 감시가 계속됩니다.'
+      : '웹/PWA 버전은 화면이 보일 때만 감시할 수 있어요. 다른 앱을 열거나 화면을 끄면 감시가 일시 중지됩니다. 백그라운드 감시는 안드로이드 설치형 앱에서 지원돼요.';
+    els.motionBgNote.classList.toggle('warn', !native);
+  }
+  if (els.motionBattery && navigator.getBattery) {
+    navigator.getBattery().then((b) => { if (els.motionBattery) els.motionBattery.textContent = `${Math.round(b.level * 100)}%`; }).catch(() => {});
+  }
+}
+
+// ==========================================================================
 // Init
 // ==========================================================================
 function init() {
@@ -1043,6 +1333,8 @@ function init() {
   renderHistory();
   setPhase(PHASE.IDLE);
   bindEvents();
+  setupMotion();
+  if (storage.getItem(MODE_KEY) === 'motion') switchMode('motion');
   registerServiceWorker();
   resizeChart();
   drawMotionChart();

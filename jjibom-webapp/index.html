@@ -43,6 +43,19 @@
         </div>
       </section>
 
+      <section class="mode-switch" aria-label="감지 방식 선택">
+        <button type="button" class="mode-card active" id="modeCameraBtn" data-mode="camera" aria-pressed="true">
+          <span class="mode-ico"><svg viewBox="0 0 24 24"><path d="M14.5 6 13 4H7L5.5 6H3v13h18V6z"/><circle cx="12" cy="12.5" r="4"/></svg></span>
+          <span class="mode-text"><strong>카메라 감지</strong><small>카메라로 찌의 움직임을 보고 입질을 알려드려요.</small></span>
+        </button>
+        <button type="button" class="mode-card" id="modeMotionBtn" data-mode="motion" aria-pressed="false">
+          <span class="mode-ico"><svg viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2M3 9v6M21 9v6"/></svg></span>
+          <span class="mode-text"><strong>진동 감지</strong><small>폰을 낚싯대에 고정하고 떨림으로 입질을 알려드려요.</small></span>
+          <span class="mode-badge" id="motionModeBadge">화면을 켠 상태에서 사용</span>
+        </button>
+      </section>
+
+      <div id="cameraMode">
       <section class="camera-card" aria-labelledby="cameraTitle">
         <div class="section-heading camera-heading">
           <div>
@@ -291,6 +304,108 @@
           <p><strong>실전 보조 도구</strong><br />알림만 믿지 말고 낚싯대와 주변 상황도 확인하세요.</p>
         </div>
       </section>
+      </div><!-- /cameraMode -->
+
+      <section id="motionMode" class="motion-mode hidden">
+        <article class="camera-card motion-card">
+          <div class="section-heading">
+            <div>
+              <span class="step-chip">01</span>
+              <div><h2>진동 감시</h2><p id="motionStateText">낚싯대에 폰을 고정하고 보정을 시작하세요.</p></div>
+            </div>
+            <div class="status-pill" id="motionStatusPill" data-status="idle">
+              <span class="status-dot"></span><span id="motionStatusLabel">대기</span>
+            </div>
+          </div>
+
+          <div class="motion-top">
+            <div class="motion-stat"><span>감시 시간</span><strong id="motionElapsed">0:00</strong></div>
+            <div class="motion-stat"><span>백그라운드 감시</span><strong id="motionBackground">웹: 불가</strong></div>
+            <div class="motion-stat"><span>배터리</span><strong id="motionBattery">—</strong></div>
+          </div>
+
+          <div class="motion-gauge-wrap">
+            <div class="gauge" id="motionGaugeBig" style="--value: 0">
+              <div><strong id="motionScoreBig">0</strong><small id="motionBandText">대기</small></div>
+            </div>
+            <div class="motion-meter">
+              <div class="motion-bar"><div class="motion-bar-fill" id="motionBarFill"></div></div>
+              <div class="motion-meter-legend"><i class="base"></i> 평소 흔들림 · <i class="trig"></i> 입질 판정선</div>
+              <div class="motion-readout"><span>현재 진동</span><strong id="motionMagnitude">0.00</strong><small>m/s²</small></div>
+            </div>
+          </div>
+
+          <div class="motion-calib hidden" id="motionCalibPanel">
+            <div class="spinner"></div>
+            <div><strong>평소 흔들림을 배우는 중</strong><small id="motionCalibText">낚싯대와 폰을 건드리지 마세요 · 0%</small></div>
+          </div>
+
+          <div class="motion-actions">
+            <button id="motionCalibrateBtn" class="btn primary" type="button">보정 시작</button>
+            <button id="motionStartBtn" class="btn secondary" type="button" disabled>감시 시작</button>
+            <button id="motionTestAlarmBtn" class="btn ghost" type="button">알람 시험</button>
+            <button id="motionStopBtn" class="text-btn" type="button">감시 종료</button>
+          </div>
+
+          <p class="motion-note" id="motionBgNote"></p>
+
+          <div class="demo-controls motion-demo" id="motionDemoControls"><span>데모</span></div>
+        </article>
+
+        <article class="settings-card motion-settings">
+          <div class="card-title-row compact">
+            <div><span class="step-chip">02</span><div><h2>진동 설정</h2><p>낚시 상황에 맞게 조절하세요.</p></div></div>
+          </div>
+          <label class="field-group">
+            <span class="field-label"><strong>민감도</strong><output id="motionSensOut">보통 5</output></span>
+            <input id="motionSensitivity" type="range" min="1" max="10" value="5" />
+            <span class="range-labels"><i>둔감</i><i>민감</i></span>
+          </label>
+          <div class="preset-row" id="motionPresets">
+            <button type="button" data-preset="3">둔감</button>
+            <button type="button" data-preset="5" class="active">보통</button>
+            <button type="button" data-preset="8">민감</button>
+          </div>
+          <label class="field-group">
+            <span class="field-label"><strong>입질 종류</strong></span>
+            <select id="motionPattern">
+              <option value="all">모두 감지</option>
+              <option value="strong">강한 당김</option>
+              <option value="tap">토독거림</option>
+              <option value="repeated">반복 진동</option>
+            </select>
+          </label>
+          <div class="toggle-list">
+            <label class="toggle-row"><span><strong>알람 소리</strong><small>입질이 오면 울림</small></span><input id="motionSound" type="checkbox" checked /><i></i></label>
+            <label class="toggle-row"><span><strong>알람 진동</strong><small>지원되는 휴대폰에서 작동</small></span><input id="motionVibration" type="checkbox" checked /><i></i></label>
+            <label class="toggle-row"><span><strong>화면 켜두기</strong><small>감시 중 화면이 꺼지지 않게</small></span><input id="motionKeepAwake" type="checkbox" checked /><i></i></label>
+            <label class="toggle-row"><span><strong>어두운 화면</strong><small>배터리 절약용 어두운 모드</small></span><input id="motionDark" type="checkbox" /><i></i></label>
+          </div>
+          <button id="motionExportBtn" class="text-btn" type="button">최근 이벤트 JSON 내보내기</button>
+        </article>
+
+        <article class="history-card motion-guide-card">
+          <details id="motionGuide" open>
+            <summary>진동 감지 사용 안내 · 안전</summary>
+            <ol class="how-list motion-how">
+              <li><span>1</span><div><strong>폰을 단단히 고정</strong><p>컵홀더·거치대·전용 커플러로 낚싯대에 흔들리지 않게 고정합니다.</p></div></li>
+              <li><span>2</span><div><strong>민감도 설정</strong><p>폰이 흔들리지 않는 상태에서 민감도를 정합니다.</p></div></li>
+              <li><span>3</span><div><strong>알림 시험</strong><p>“알람 시험”으로 소리와 진동을 확인합니다.</p></div></li>
+              <li><span>4</span><div><strong>보정 시작</strong><p>“보정 시작”을 누르고 낚싯대를 건드리지 않습니다.</p></div></li>
+              <li><span>5</span><div><strong>감시 시작</strong><p>보정이 끝나면 입질 감시가 시작됩니다.</p></div></li>
+              <li><span>6</span><div><strong>백그라운드</strong><p>안드로이드 앱에서는 다른 앱을 쓰거나 화면을 꺼도 감시가 계속됩니다.</p></div></li>
+            </ol>
+            <div class="notice-box">
+              <strong>안전 안내</strong>
+              <p>· 폰이 물에 빠지지 않도록 안전줄 사용을 권장합니다.<br />· 캐스팅할 때 폰을 낚싯대에 부착한 채 휘두르지 마세요.<br />· 거치대가 느슨하면 오탐이 늘 수 있습니다.</p>
+            </div>
+            <div class="motion-checks">
+              <button id="checkInstallBtn" class="btn secondary" type="button">설치 상태 확인</button>
+              <button id="checkSensorBtn" class="btn secondary" type="button">센서 확인</button>
+            </div>
+          </details>
+        </article>
+      </section>
     </main>
 
     <footer>
@@ -324,6 +439,21 @@
         <button id="feedbackFalseBtn" class="btn secondary" type="button">아니에요, 오탐이에요</button>
       </div>
       <button id="feedbackSkipBtn" class="text-btn" type="button">나중에 표시</button>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="motionAlarmModal" role="dialog" aria-modal="true" aria-labelledby="motionAlarmTitle">
+    <div class="modal feedback-modal">
+      <span class="feedback-icon">🎣</span>
+      <h2 id="motionAlarmTitle">입질 감지!</h2>
+      <p id="motionAlarmReason">낚싯대가 크게 흔들렸어요.</p>
+      <div class="alarm-score"><span>감지 강도</span><strong id="motionAlarmScore">0</strong></div>
+      <button id="motionAlarmStop" class="btn alarm-stop full" type="button">알람 멈추기</button>
+      <div class="feedback-actions motion-feedback">
+        <button data-mlabel="true_positive" class="btn success" type="button">입질 맞음</button>
+        <button data-mlabel="false_positive" class="btn secondary" type="button">오탐</button>
+      </div>
+      <button data-mlabel="unsure" class="text-btn" type="button">잘 모르겠음</button>
     </div>
   </div>
 

@@ -1,0 +1,27 @@
+<!--
+  Merge these into android/app/src/main/AndroidManifest.xml after `npx cap add android`.
+  Only the accelerometer is needed; gyroscope is optional. We intentionally do NOT
+  request BODY_SENSORS, location, microphone or camera for the vibration mode.
+-->
+
+<!-- === Add inside <manifest>, above <application> === -->
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+<!-- Android 14+ requires a typed FGS permission; this use case has no dedicated
+     type, so we use SPECIAL_USE (see the <property> on the service below). -->
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+<uses-permission android:name="android.permission.VIBRATE" />
+<uses-permission android:name="android.permission.WAKE_LOCK" />
+
+<uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
+<uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
+
+<!-- === Add inside <application> === -->
+<service
+    android:name="app.jjibom.motion.VibrationDetectionService"
+    android:exported="false"
+    android:foregroundServiceType="specialUse">
+    <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="Continuous fishing-bite vibration detection while the phone is mounted on a fishing rod and the screen may be off. User-initiated from the app and always stoppable from the ongoing notification." />
+</service>

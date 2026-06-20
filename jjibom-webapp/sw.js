@@ -4,7 +4,7 @@
 
 // Bump CACHE_VERSION on every deploy so the old app shell is dropped on
 // activate. The "v" number is the single source of truth for cache busting.
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const CACHE_PREFIX = 'jjibom-';
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 
@@ -30,6 +30,15 @@ const APP_SHELL = [
   './src/alarm.js',
   './src/storage.js',
   './src/demo.js',
+  './src/motionConfig.js',
+  './src/motionFilter.js',
+  './src/motionCalibration.js',
+  './src/vibrationDetector.js',
+  './src/motionState.js',
+  './src/motionSensor.js',
+  './src/nativeBridge.js',
+  './src/motionController.js',
+  './src/motionScenarios.js',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];

@@ -52,13 +52,50 @@ python3 -m http.server 8080
 - **상태 머신**: `TRACKING / POSSIBLE_BITE / LOST / RECOVERING / ALARM` 등으로 나눠, 한두 프레임 놓침이 입질로 둔갑하지 않습니다.
 - **패턴 분리**: 잠김(아래로 + 면적 감소), 급상승, 반복 떨림, 파도/바람을 구분해 점수화합니다.
 
+## 진동 감지 모드 (가속도·자이로 센서)
+
+홈에서 **카메라 감지 / 진동 감지** 중 선택할 수 있습니다. 진동 감지는 스마트폰을 낚싯대에 단단히 고정하고, 가속도계·자이로 센서로 낚싯대의 떨림을 분석해 입질을 알립니다. 카메라 권한을 요청하지 않습니다.
+
+흐름: **보정 시작**(5~8초, 낚싯대를 건드리지 않음) → **감시 시작**(보정 후 자동) → 잠김(강한 당김)/토독/반복 진동 감지 시 알람. 센서 없이 시험하려면 **데모** 버튼으로 잔잔·바람·강한 당김·토독·반복·폰 만짐·센서 끊김 등 시나리오를 재생할 수 있습니다(실제 판정 모듈을 그대로 사용).
+
+판정 방식 요약:
+- 중력 성분을 저역통과로 추정·제거해 선형 가속도를 구하고, 정지 상태의 9.8 m/s²를 입질로 보지 않습니다.
+- 보정에서 **중앙값·MAD**(이상치에 강함)로 기준을 잡고, 임계값을 `중앙값 + 민감도계수 × MAD` 로 둡니다.
+- **짧은 창(≈320ms)·긴 창(≈1.5s)** 두 시간 창의 RMS·피크·방향 전환·자이로·지속시간으로 0~100 점수를 냅니다.
+- **강한 당김 / 토독 / 반복 / 바람(억제) / 폰 접촉**을 구분합니다. 한 번의 작은 튐은 알람이 아니며, 폰을 건드리면 입질이 아니라 “재안정화”로 처리합니다.
+- 알람 진동 직전 센서 판정을 음소거해 **자기 진동을 재감지하지 않습니다.** 쿨다운으로 같은 입질의 중복 알람을 막습니다.
+
+### ⚠️ 백그라운드에 대한 정직한 안내
+
+- **웹/PWA(브라우저):** 화면이 보일 때만 감시할 수 있습니다. 다른 앱을 열거나 화면을 끄면 OS가 센서·타이머를 멈추므로 감시가 **일시 중지**됩니다. 무음 오디오·서비스워커 등으로 백그라운드를 흉내 내지 않으며, 화면을 벗어나면 그 사실을 표시합니다.
+- **안드로이드 설치형 앱(Capacitor + Foreground Service):** 다른 앱을 쓰거나 화면을 꺼도 감시가 계속되고, 상태표시줄에 항상 “입질 감시 중” 알림(일시정지/종료)이 뜹니다. 네이티브 소스·빌드 방법은 [`android-native/README.md`](android-native/README.md) 참고. (이 저장소 환경에는 Android SDK가 없어 APK 빌드는 로컬에서 진행해야 합니다.)
+- **iOS/Safari:** 화면이 보일 때만 시험 지원합니다. iOS 백그라운드 센서 감지는 지원한다고 표시하지 않습니다.
+
 ## 파일 구성
 
 ```text
 jjibom-webapp/
-├── index.html              화면 구조
+├── index.html              화면 구조 (카메라/진동 모드)
 ├── styles.css              모바일/데스크톱 디자인
-├── app.js                  오케스트레이션 (DOM·분석 루프·데모 연결)
+├── app.js                  오케스트레이션 (DOM·분석 루프·모드 전환·데모)
+├── capacitor.config.ts     안드로이드 설치형 앱 설정
+├── scripts/build-web.mjs   정적 자산을 www/ 로 복사 (Capacitor용)
+├── android-native/         커스텀 Kotlin 플러그인 + Foreground Service
+│   ├── JjibomMotionPlugin.kt       Capacitor 브리지
+│   ├── VibrationDetectionService.kt 백그라운드 센서 감지 서비스
+│   ├── MotionSignalProcessor.kt    판정 로직 (웹 detector의 Kotlin 포트)
+│   ├── MonitoringNotification.kt   지속/입질 알림 채널
+│   └── README.md                   빌드·통합·권한 안내
+├── src/ (진동 모드 추가분)
+│   ├── motionConfig.js     진동 판정 상수 (단위 주석)
+│   ├── motionFilter.js     벡터크기·중력제거·EMA·피크/엣지·반전
+│   ├── motionCalibration.js 보정(중앙값/MAD)·실패 사유
+│   ├── vibrationDetector.js 두 시간 창 판정·점수·알람 게이트
+│   ├── motionState.js      진동 모드 상태 머신
+│   ├── motionSensor.js     DeviceMotionEvent 래퍼(권한·중단 감지)
+│   ├── motionController.js 웹 오케스트레이션(센서→판정→알람→UI)
+│   ├── motionScenarios.js  데모/재생용 합성 센서 트레이스
+│   └── nativeBridge.js     Capacitor 플러그인 감지·프록시(없으면 웹 폴백)
 ├── manifest.webmanifest    PWA 설치 정보
 ├── sw.js                   서비스 워커 (버전 캐시 + 전략별 페치)
 ├── package.json            Node 테스트 러너 설정 (type: module)
