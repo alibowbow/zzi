@@ -1,1537 +1,1210 @@
-(() => {
-  'use strict';
+// app.js — orchestration layer. Owns the DOM, the analysis loop and the demo,
+// and wires together the (testable, DOM-free) modules in ./src. The heavy
+// computation lives in those modules; this file connects them to the page.
 
-  const memoryStore = new Map();
-  const storage = {
-    getItem(key) {
-      try { return window.localStorage.getItem(key); }
-      catch { return memoryStore.has(key) ? memoryStore.get(key) : null; }
-    },
-    setItem(key, value) {
-      try { window.localStorage.setItem(key, String(value)); }
-      catch { memoryStore.set(key, String(value)); }
+import { clamp, lerp, median, mad, ema } from './src/stats.js';
+import { rgbToHsv, representativeColor, colorName, rgbToHex, luma } from './src/color.js';
+import { mediaDisplayRect, displayToMedia, mediaToDisplay } from './src/geometry.js';
+import { BlobTracker, computeConfidence } from './src/blobTracker.js';
+import { estimateBackgroundMotion } from './src/motionCompensation.js';
+import { analyzeBite, AlarmGate } from './src/biteDetector.js';
+import { TrackingMachine, TrackState, alarmGateOpen } from './src/trackingState.js';
+import { Diagnostics } from './src/diagnostics.js';
+import { CameraController } from './src/camera.js';
+import { AlarmController } from './src/alarm.js';
+import { storage, loadJson, saveJson, downloadJson } from './src/storage.js';
+import { DemoScene } from './src/demo.js';
+import {
+  ANALYSIS_MAX, PROCESS_INTERVAL_MS, CALIBRATION_FRAMES,
+  ROI, BLOB, SHAKE, BITE, CALIB, CONFIDENCE, APP_VERSION
+} from './src/config.js';
+
+const HISTORY_KEY = 'jjibom-history-v1';
+const SETTINGS_KEY = 'jjibom-settings-v1';
+const ADAPTIVE_KEY = 'jjibom-adaptive-v1';
+
+// App-level UI phases (chrome). The fine-grained tracking states (TRACKING /
+// LOST / RECOVERING …) live in the TrackingMachine and run during MONITORING.
+const PHASE = Object.freeze({
+  IDLE: 'idle', CAMERA: 'camera', CALIBRATING: 'calibrating',
+  READY: 'ready', MONITORING: 'monitoring', ALARM: 'alarm'
+});
+
+const $ = (id) => document.getElementById(id);
+const els = {};
+[
+  'camera', 'cameraStage', 'overlay', 'analysisCanvas', 'demoCanvas', 'cameraEmpty',
+  'tapGuide', 'calibrationPanel', 'calibrationText', 'cameraHud', 'startCameraBtn',
+  'startDemoBtn', 'stopCameraBtn', 'flipCameraBtn', 'resetTargetBtn', 'monitorBtn',
+  'statusPill', 'statusLabel', 'stateText', 'confidenceText', 'fpsText', 'wakeText',
+  'targetSwatch', 'targetColorText', 'demoControls', 'alarmLayer', 'alarmTitle',
+  'alarmReason', 'alarmScore', 'stopAlarmBtn', 'motionGauge', 'motionScore',
+  'verticalMove', 'confidenceMetric', 'areaMetric', 'motionChart', 'sensitivity',
+  'sensitivityOutput', 'detectMode', 'nightMode', 'soundEnabled', 'vibrationEnabled',
+  'waveCorrection', 'colorTolerance', 'toleranceOutput', 'historyList', 'clearHistoryBtn',
+  'installBtn', 'helpBtn', 'helpModal', 'closeHelpBtn', 'helpOkayBtn', 'feedbackModal',
+  'feedbackTrueBtn', 'feedbackFalseBtn', 'feedbackSkipBtn', 'toast',
+  // new optional elements (guarded with ?. everywhere)
+  'cameraSelect', 'zoomControl', 'zoomRange', 'diagPanel', 'diagState', 'diagConfidence',
+  'diagPos', 'diagCorrectedDy', 'diagBgDy', 'diagFloatHeight', 'diagCurHeight',
+  'diagAreaRatio', 'diagBiteScore', 'diagFps', 'diagExportBtn', 'updateBanner', 'reloadBtn'
+].forEach((id) => { els[id] = $(id); });
+
+const analysisCtx = els.analysisCanvas.getContext('2d', { willReadFrequently: true });
+const overlayCtx = els.overlay.getContext('2d');
+const chartCtx = els.motionChart.getContext('2d');
+
+// --- Controllers / modules ------------------------------------------------
+const cameraCtl = new CameraController(els.camera);
+const alarmCtl = new AlarmController();
+const demo = new DemoScene();
+const blobTracker = new BlobTracker();
+const alarmGate = new AlarmGate();
+const machine = new TrackingMachine();
+const diagnostics = new Diagnostics();
+
+// --- Mutable app state ----------------------------------------------------
+let phase = PHASE.IDLE;
+let isDemo = false;
+let facingMode = 'environment';
+let frameLoopToken = 0;
+let lastProcessAt = 0;
+let lastFrameAt = 0;
+let fpsEma = 0;
+let target = null;
+let calibrationSamples = [];
+let history = loadJson(HISTORY_KEY, []);
+let adaptiveAdjustment = Number(storage.getItem(ADAPTIVE_KEY) || 0);
+let currentEventId = null;
+let feedbackEventId = null;
+let lastExportableEvent = null;
+let deferredInstallPrompt = null;
+let toastTimer = null;
+let alarmTimer = null;
+
+// Per-frame analysis scratch (reused; no per-frame big allocations).
+let frameImage = null;       // ImageData reused via getImageData
+let prevLuma = null;         // Float32Array of previous processed frame luma
+let currLuma = null;
+let lumaSize = 0;
+let bgOffsetX = 0;           // leaky-integrated background displacement (px)
+let bgOffsetY = 0;
+let shakingUntil = 0;
+
+// Monitoring timers / trackers
+let lastFoundAt = 0;
+let lowConfSince = 0;
+let stableFrames = 0;
+let lastKnownX = 0;
+let lastKnownY = 0;
+let graph = [];
+
+const settings = Object.assign({
+  sensitivity: 6, detectMode: 'balanced', nightMode: false,
+  soundEnabled: true, vibrationEnabled: true, waveCorrection: true, colorTolerance: 28
+}, loadJson(SETTINGS_KEY, {}));
+
+// ==========================================================================
+// Settings + UI plumbing
+// ==========================================================================
+function saveSettings() { saveJson(SETTINGS_KEY, settings); }
+
+function applySettingsToUi() {
+  els.sensitivity.value = settings.sensitivity;
+  els.detectMode.value = settings.detectMode;
+  els.nightMode.checked = settings.nightMode;
+  els.soundEnabled.checked = settings.soundEnabled;
+  els.vibrationEnabled.checked = settings.vibrationEnabled;
+  els.waveCorrection.checked = settings.waveCorrection;
+  els.colorTolerance.value = settings.colorTolerance;
+  updateSettingLabels();
+}
+
+function updateSettingLabels() {
+  const value = Number(els.sensitivity.value);
+  const label = value <= 3 ? '둔감' : value <= 7 ? '보통' : '민감';
+  els.sensitivityOutput.textContent = `${label} ${value}`;
+  els.toleranceOutput.textContent = els.colorTolerance.value;
+}
+
+const PHASE_LABELS = {
+  [PHASE.IDLE]: ['대기', '카메라를 켜고 찌를 선택하세요.'],
+  [PHASE.CAMERA]: ['찌 선택', '화면에서 찌 끝의 선명한 색을 터치하세요.'],
+  [PHASE.CALIBRATING]: ['보정 중', '평소 물결 움직임을 잠깐 배우고 있어요.'],
+  [PHASE.READY]: ['준비 완료', '감시 시작을 누르면 입질 알람이 켜집니다.'],
+  [PHASE.MONITORING]: ['감시 중', '찌 움직임을 실시간으로 살펴보고 있어요.'],
+  [PHASE.ALARM]: ['입질!', '큰 움직임이 감지됐어요.']
+};
+
+function setPhase(next) {
+  phase = next;
+  els.statusPill.dataset.status = next;
+  els.statusLabel.textContent = PHASE_LABELS[next][0];
+  els.stateText.textContent = PHASE_LABELS[next][1];
+  els.cameraEmpty.classList.toggle('hidden', next !== PHASE.IDLE);
+  els.tapGuide.classList.toggle('hidden', next !== PHASE.CAMERA);
+  els.calibrationPanel.classList.toggle('hidden', next !== PHASE.CALIBRATING);
+  els.cameraHud.classList.toggle('hidden', next === PHASE.IDLE);
+  els.stopCameraBtn.classList.toggle('hidden', next === PHASE.IDLE);
+  els.flipCameraBtn.classList.toggle('hidden', next === PHASE.IDLE || isDemo);
+  els.resetTargetBtn.classList.toggle('hidden', !target || next === PHASE.IDLE || next === PHASE.ALARM);
+  els.demoControls?.classList.toggle('hidden', !isDemo || next === PHASE.IDLE);
+  els.alarmLayer.classList.toggle('hidden', next !== PHASE.ALARM);
+
+  const canMonitor = next === PHASE.READY || next === PHASE.MONITORING || next === PHASE.ALARM;
+  els.monitorBtn.disabled = !canMonitor;
+  els.monitorBtn.classList.toggle('monitoring', next === PHASE.MONITORING || next === PHASE.ALARM);
+  if (next === PHASE.MONITORING) els.monitorBtn.innerHTML = '<span class="record-dot"></span>감시 멈춤';
+  else if (next === PHASE.ALARM) els.monitorBtn.innerHTML = '<span class="record-dot"></span>알람 멈춤';
+  else els.monitorBtn.innerHTML = '<span class="record-dot"></span>감시 시작';
+}
+
+function showToast(message, duration = 2500) {
+  clearTimeout(toastTimer);
+  els.toast.textContent = message;
+  els.toast.classList.remove('hidden');
+  toastTimer = setTimeout(() => els.toast.classList.add('hidden'), duration);
+}
+
+function showModal(modal) { modal.classList.remove('hidden'); document.body.style.overflow = 'hidden'; }
+function hideModal(modal) {
+  modal.classList.add('hidden');
+  if (els.helpModal.classList.contains('hidden') && els.feedbackModal.classList.contains('hidden')) {
+    document.body.style.overflow = '';
+  }
+}
+
+// ==========================================================================
+// Camera / demo lifecycle
+// ==========================================================================
+async function startCamera() {
+  await stopEverything(true);
+  await alarmCtl.ensureAudio();
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showToast(window.isSecureContext
+      ? '이 브라우저는 카메라 기능을 지원하지 않아요.'
+      : '카메라는 HTTPS 주소 또는 localhost에서만 사용할 수 있어요.', 4500);
+    return;
+  }
+
+  els.startCameraBtn.disabled = true;
+  els.startCameraBtn.textContent = '카메라 여는 중…';
+  try {
+    await cameraCtl.start({ facingMode });
+    isDemo = false;
+    configureCanvases();
+    resetTarget(false);
+    setPhase(PHASE.CAMERA);
+    startFrameLoop();
+    await alarmCtl.requestWakeLock();
+    await refreshCameraControls();
+    showToast('카메라가 켜졌어요. 찌 끝을 터치하세요.');
+  } catch (error) {
+    console.error(error);
+    let message = '카메라를 열지 못했어요.';
+    if (error?.name === 'NotAllowedError') message = '카메라 권한이 거부됐어요. 브라우저 설정에서 허용해주세요.';
+    else if (error?.name === 'NotFoundError') message = '사용할 수 있는 카메라를 찾지 못했어요.';
+    else if (error?.name === 'NotReadableError') message = '다른 앱이 카메라를 사용 중일 수 있어요.';
+    else if (error?.name === 'NotSupportedError') message = '이 브라우저는 카메라 기능을 지원하지 않아요.';
+    showToast(message, 4500);
+    setPhase(PHASE.IDLE);
+  } finally {
+    els.startCameraBtn.disabled = false;
+    els.startCameraBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M14.5 6 13 4H7L5.5 6H3v13h18V6z"/><circle cx="12" cy="12.5" r="4"/></svg>카메라 켜기';
+  }
+}
+
+async function startDemo() {
+  await stopEverything(true);
+  await alarmCtl.ensureAudio();
+  if (!els.demoCanvas.captureStream) {
+    showToast('이 브라우저에서는 데모 영상을 만들 수 없어요.');
+    return;
+  }
+  isDemo = true;
+  facingMode = 'environment';
+  els.demoCanvas.width = 960;
+  els.demoCanvas.height = 540;
+  demo.start(els.demoCanvas);
+  try {
+    const stream = els.demoCanvas.captureStream(30);
+    await cameraCtl.useStream(stream);
+    configureCanvases();
+    resetTarget(false);
+    setPhase(PHASE.CAMERA);
+    startFrameLoop();
+    await alarmCtl.requestWakeLock();
+    showToast('데모가 시작됐어요. 빨간 찌 끝을 터치하세요.', 3500);
+  } catch (error) {
+    console.error(error);
+    showToast('데모 영상을 시작하지 못했어요.');
+    await stopEverything(true);
+  }
+}
+
+async function stopEverything(quiet = false) {
+  cancelAlarm(false);
+  frameLoopToken += 1;
+  demo.stop();
+  await cameraCtl.stop();
+  isDemo = false;
+  prevLuma = null;
+  currLuma = null;
+  resetTarget(false);
+  clearOverlay();
+  resetMetrics();
+  await alarmCtl.releaseWakeLock();
+  setPhase(PHASE.IDLE);
+  if (!quiet) showToast('카메라를 껐어요.');
+}
+
+async function flipCamera() {
+  if (isDemo) return;
+  facingMode = facingMode === 'environment' ? 'user' : 'environment';
+  await startCamera();
+}
+
+async function refreshCameraControls() {
+  // Device picker (only when more than one rear camera is available).
+  if (els.cameraSelect) {
+    const inputs = await cameraCtl.listVideoInputs();
+    if (inputs.length > 1 && !isDemo) {
+      els.cameraSelect.innerHTML = '';
+      inputs.forEach((device, index) => {
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        option.textContent = device.label || `카메라 ${index + 1}`;
+        if (device.deviceId === cameraCtl.deviceId) option.selected = true;
+        els.cameraSelect.appendChild(option);
+      });
+      els.cameraSelect.classList.remove('hidden');
+    } else {
+      els.cameraSelect.classList.add('hidden');
     }
+  }
+  // Zoom slider (only when the track exposes a zoom capability).
+  if (els.zoomControl && els.zoomRange) {
+    const zoom = cameraCtl.getZoomCapability();
+    if (zoom && !isDemo) {
+      els.zoomRange.min = zoom.min;
+      els.zoomRange.max = zoom.max;
+      els.zoomRange.step = zoom.step;
+      els.zoomRange.value = zoom.current;
+      els.zoomControl.classList.remove('hidden');
+    } else {
+      els.zoomControl.classList.add('hidden');
+    }
+  }
+}
+
+function configureCanvases() {
+  const vw = els.camera.videoWidth || 1280;
+  const vh = els.camera.videoHeight || 720;
+  if (vw >= vh) {
+    els.analysisCanvas.width = ANALYSIS_MAX;
+    els.analysisCanvas.height = Math.max(120, Math.round(ANALYSIS_MAX * vh / vw));
+  } else {
+    els.analysisCanvas.height = ANALYSIS_MAX;
+    els.analysisCanvas.width = Math.max(120, Math.round(ANALYSIS_MAX * vw / vh));
+  }
+  lumaSize = els.analysisCanvas.width * els.analysisCanvas.height;
+  prevLuma = null;
+  currLuma = new Float32Array(lumaSize);
+  resizeOverlay();
+  resizeChart();
+}
+
+// ==========================================================================
+// Coordinate helpers (object-fit aware)
+// ==========================================================================
+function stageRect() { return els.cameraStage.getBoundingClientRect(); }
+
+function videoRect() {
+  const stage = stageRect();
+  // CSS uses object-fit: contain for #camera.
+  return mediaDisplayRect(stage.width, stage.height, els.camera.videoWidth, els.camera.videoHeight, 'contain');
+}
+
+// ==========================================================================
+// Frame loop
+// ==========================================================================
+function startFrameLoop() {
+  const token = ++frameLoopToken;
+  lastProcessAt = 0;
+  lastFrameAt = 0;
+  fpsEma = 0;
+  const useVfc = typeof els.camera.requestVideoFrameCallback === 'function';
+  const step = (now) => {
+    if (token !== frameLoopToken || !cameraCtl.isActive) return;
+    if (!lastProcessAt || now - lastProcessAt >= PROCESS_INTERVAL_MS) {
+      try { processFrame(now); } catch (error) { console.error('frame error', error); }
+      lastProcessAt = now;
+    }
+    if (useVfc) els.camera.requestVideoFrameCallback(step);
+    else requestAnimationFrame(step);
+  };
+  if (useVfc) els.camera.requestVideoFrameCallback(step);
+  else requestAnimationFrame(step);
+}
+
+function processFrame(now) {
+  const aw = els.analysisCanvas.width;
+  const ah = els.analysisCanvas.height;
+  if (!els.camera.videoWidth || !aw) return;
+  try {
+    analysisCtx.drawImage(els.camera, 0, 0, aw, ah);
+  } catch { return; }
+
+  // FPS estimate.
+  if (lastFrameAt) {
+    const instantFps = 1000 / Math.max(1, now - lastFrameAt);
+    fpsEma = fpsEma ? lerp(fpsEma, instantFps, 0.12) : instantFps;
+    els.fpsText.textContent = `${Math.round(fpsEma)}`;
+  }
+  lastFrameAt = now;
+
+  // Single getImageData for the whole frame; luma + blob mask both read from it.
+  frameImage = analysisCtx.getImageData(0, 0, aw, ah);
+  fillLuma(frameImage.data, aw, ah);
+
+  if (target) {
+    const result = trackFrame(aw, ah, now);
+    if (phase === PHASE.CALIBRATING) updateCalibration(result, now);
+    else if (phase === PHASE.MONITORING) updateMonitoring(result, now);
+    else updateIdleMetrics(result);
+  }
+
+  // Roll luma buffers for the next frame's background motion estimate.
+  const swap = prevLuma;
+  prevLuma = currLuma;
+  currLuma = swap || new Float32Array(lumaSize);
+
+  drawOverlay();
+}
+
+function fillLuma(data, aw, ah) {
+  if (!currLuma || currLuma.length !== aw * ah) currLuma = new Float32Array(aw * ah);
+  for (let p = 0, i = 0; p < currLuma.length; p += 1, i += 4) {
+    currLuma[p] = luma(data[i], data[i + 1], data[i + 2]);
+  }
+}
+
+// Run blob tracking + motion estimation for one frame. Returns a rich result.
+function trackFrame(aw, ah, now) {
+  const lost = target.lostFrames || 0;
+  const global = lost >= ROI.GLOBAL_AFTER_LOST;
+  const floatHeight = target.floatHeight || target.heightEst || 12;
+  const radius = global
+    ? Math.max(aw, ah)
+    : Math.max(clamp(ROI.BASE_RADIUS_PX + lost * ROI.GROW_PER_LOST_PX, ROI.BASE_RADIUS_PX, ROI.MAX_RADIUS_PX), floatHeight * 2.2);
+  const rx = global ? 0 : clamp(Math.floor(target.x - radius), 0, aw - 1);
+  const ry = global ? 0 : clamp(Math.floor(target.y - radius), 0, ah - 1);
+  const rw = global ? aw : clamp(Math.ceil(target.x + radius), 1, aw) - rx;
+  const rh = global ? ah : clamp(Math.ceil(target.y + radius), 1, ah) - ry;
+  const roi = { x: rx, y: ry, w: rw, h: rh };
+
+  const options = {
+    tolerance: Number(settings.colorTolerance),
+    nightMode: settings.nightMode,
+    minArea: BLOB.MIN_AREA_PX,
+    connectivity: BLOB.CONNECTIVITY,
+    maxBlobs: BLOB.MAX_BLOBS
+  };
+  const ctx = {
+    hasPrediction: !global,
+    predictX: target.x - rx,
+    predictY: target.y - ry,
+    initialX: target.initialX - rx,
+    initialY: target.initialY - ry,
+    floatHeight,
+    floatArea: target.floatArea || 0
   };
 
-  const ANALYSIS_MAX = 320;
-  const PROCESS_INTERVAL = 66;
-  const CALIBRATION_FRAMES = 36;
-  const HISTORY_KEY = 'jjibom-history-v1';
-  const SETTINGS_KEY = 'jjibom-settings-v1';
-  const ADAPTIVE_KEY = 'jjibom-adaptive-v1';
+  const found = blobTracker.analyze(frameImage.data, aw, roi, target, options, ctx);
+  const best = found.best;
 
-  const STATES = Object.freeze({
-    IDLE: 'idle',
-    CAMERA: 'camera',
-    CALIBRATING: 'calibrating',
-    READY: 'ready',
-    MONITORING: 'monitoring',
-    ALARM: 'alarm'
+  // Background (camera/mount) motion for this frame. The exclude rect uses
+  // width/height keys (the ROI uses w/h), so convert.
+  const exclude = { x: roi.x, y: roi.y, width: roi.w, height: roi.h };
+  const background = estimateBackgroundMotion(prevLuma, currLuma, aw, ah, exclude, SHAKE);
+  const bgMag = Math.hypot(background.dx, background.dy);
+  const bgMagNorm = bgMag / floatHeight;
+  const shaking = background.confidence >= SHAKE.MIN_CONFIDENCE && bgMagNorm >= SHAKE.ALARM_SUPPRESS_NORM;
+  if (shaking) shakingUntil = now + SHAKE.SUPPRESS_MS;
+
+  // Leaky-integrate background displacement so we can subtract slow camera drift
+  // / jitter from the float position without unbounded accumulation.
+  if (background.confidence >= SHAKE.MIN_CONFIDENCE) {
+    bgOffsetX = bgOffsetX * 0.88 + background.dx;
+    bgOffsetY = bgOffsetY * 0.88 + background.dy;
+  } else {
+    bgOffsetX *= 0.85;
+    bgOffsetY *= 0.85;
+  }
+
+  const accepted = best && found.bestScore >= 0.22 && best.qualityMean >= 0.18;
+  if (!accepted) {
+    target.lostFrames = lost + 1;
+    target.confidence *= 0.7;
+    return {
+      found: false, x: target.x, y: target.y, area: 0, height: 0, width: 0,
+      confidence: target.confidence, lostFrames: target.lostFrames,
+      background, bgMagNorm, shaking
+    };
+  }
+
+  const absX = roi.x + best.cx;
+  const absY = roi.y + best.cy;
+  const jumpPx = target.prevX != null ? Math.hypot(absX - target.prevX, absY - target.prevY) : 0;
+  const areaRatio = target.floatArea ? best.area / target.floatArea : 1;
+  const aspect = best.height / Math.max(1, best.width);
+  const confidence = computeConfidence({
+    colorMean: best.qualityMean, jumpPx, floatHeight,
+    areaRatio, aspect, margin: found.margin
+  });
+  const smoothing = confidence > 0.62 ? 0.55 : confidence > 0.35 ? 0.4 : 0.26;
+
+  target.prevX = target.x;
+  target.prevY = target.y;
+  target.x = lerp(target.x, absX, smoothing);
+  target.y = lerp(target.y, absY, smoothing);
+  target.area = target.area ? lerp(target.area, best.area, 0.36) : best.area;
+  target.height = target.height ? lerp(target.height, best.height, 0.4) : best.height;
+  target.width = best.width;
+  target.heightEst = target.heightEst ? ema(target.heightEst, best.height, 0.1) : best.height;
+  target.confidence = confidence;
+  target.lostFrames = 0;
+
+  return {
+    found: true, x: target.x, y: target.y, area: target.area, height: target.height,
+    width: best.width, confidence, lostFrames: 0,
+    background, bgMagNorm, shaking, rawX: absX, rawY: absY
+  };
+}
+
+// ==========================================================================
+// Target selection
+// ==========================================================================
+function handleTargetPointer(event) {
+  if (!cameraCtl.isActive || phase === PHASE.IDLE || phase === PHASE.ALARM) return;
+  if (phase === PHASE.MONITORING) { showToast('감시를 먼저 멈춘 뒤 찌를 다시 선택해주세요.'); return; }
+  if (phase === PHASE.CALIBRATING) return;
+
+  const rect = stageRect();
+  const vr = videoRect();
+  const px = event.clientX - rect.left;
+  const py = event.clientY - rect.top;
+  const point = displayToMedia(px, py, vr, els.camera.videoWidth, els.camera.videoHeight);
+  if (!point.inside) { showToast('영상 안쪽의 찌를 터치해주세요.'); return; }
+
+  // Convert media coords -> analysis-canvas coords.
+  const ax = point.x / els.camera.videoWidth * els.analysisCanvas.width;
+  const ay = point.y / els.camera.videoHeight * els.analysisCanvas.height;
+  selectTarget(ax, ay);
+}
+
+function selectTarget(x, y) {
+  try {
+    const aw = els.analysisCanvas.width;
+    const ah = els.analysisCanvas.height;
+    analysisCtx.drawImage(els.camera, 0, 0, aw, ah);
+    const radius = 5;
+    const x0 = clamp(Math.floor(x - radius), 0, aw - 1);
+    const y0 = clamp(Math.floor(y - radius), 0, ah - 1);
+    const x1 = clamp(Math.ceil(x + radius), 1, aw);
+    const y1 = clamp(Math.ceil(y + radius), 1, ah);
+    const patch = analysisCtx.getImageData(x0, y0, x1 - x0, y1 - y0);
+    const sample = representativeColor(patch.data, (x1 - x0) * (y1 - y0));
+    if (!sample) { showToast('색을 읽지 못했어요. 다시 터치해주세요.'); return; }
+
+    target = {
+      initialX: x, initialY: y, x, y, prevX: null, prevY: null,
+      rgb: sample.rgb, hsv: sample.hsv,
+      area: 0, height: 0, width: 0, heightEst: 0,
+      baselineY: y, floatHeight: 0, floatArea: 0, waveMad: 0.6, bgShakeBaseline: 0,
+      confidence: 1, lostFrames: 0
+    };
+    calibrationSamples = [];
+    bgOffsetX = 0; bgOffsetY = 0;
+    updateTargetColorUi();
+    setPhase(PHASE.CALIBRATING);
+    showToast('찌를 찾았어요. 잠깐만 그대로 두세요.');
+  } catch (error) {
+    console.error(error);
+    showToast('찌 색을 읽는 중 문제가 생겼어요.');
+  }
+}
+
+function updateTargetColorUi() {
+  if (!target) return;
+  els.targetSwatch.style.background = `rgb(${target.rgb.r}, ${target.rgb.g}, ${target.rgb.b})`;
+  els.targetColorText.textContent = `${colorName(target.hsv)} · ${rgbToHex(target.rgb)}`;
+}
+
+// ==========================================================================
+// Calibration (robust: median + MAD, validated before monitoring)
+// ==========================================================================
+function updateCalibration(result, now) {
+  calibrationSamples.push({
+    found: result.found, y: result.y, area: result.area,
+    height: result.height, confidence: result.confidence, bgMagNorm: result.bgMagNorm
+  });
+  const progress = clamp(calibrationSamples.length / CALIBRATION_FRAMES, 0, 1);
+  if (els.calibrationText) els.calibrationText.textContent = `폰을 움직이지 말아주세요 · ${Math.round(progress * 100)}%`;
+  if (calibrationSamples.length < CALIBRATION_FRAMES) return;
+
+  const found = calibrationSamples.filter((s) => s.found && s.confidence >= 0.2);
+  const foundRatio = found.length / calibrationSamples.length;
+  const meanConf = found.length ? found.reduce((a, s) => a + s.confidence, 0) / found.length : 0;
+  const ys = found.map((s) => s.y);
+  const heights = found.map((s) => s.height).filter((h) => h > 0);
+  const areas = found.map((s) => s.area).filter((a) => a > 0);
+  const floatHeight = heights.length ? median(heights) : 0;
+  const floatArea = areas.length ? median(areas) : 0;
+  const waveMad = Math.max(0.4, mad(ys));
+  const bgShake = median(calibrationSamples.map((s) => s.bgMagNorm || 0));
+
+  // --- Validate ----------------------------------------------------------
+  const fail = (message) => { showToast(message, 4200); calibrationSamples = []; if (target) setPhase(PHASE.CAMERA); };
+  if (foundRatio < CALIB.MIN_FOUND_RATIO) return fail('찌를 자주 놓치고 있어요. 더 선명한 부분을 다시 선택해주세요.');
+  if (meanConf < CALIB.MIN_MEAN_CONFIDENCE) return fail('찌와 비슷한 색이 주변에 너무 많아요. 더 또렷한 색을 골라보세요.');
+  if (floatHeight < CALIB.MIN_FLOAT_HEIGHT_PX) return fail('찌가 너무 작게 보여요. 줌을 키우거나 카메라를 가까이 해주세요.');
+  if (bgShake > CALIB.MAX_BG_SHAKE_NORM) return fail('카메라가 많이 흔들려요. 거치대에 단단히 고정해주세요.');
+
+  target.baselineY = median(ys);
+  target.floatHeight = floatHeight;
+  target.floatArea = floatArea;
+  target.waveMad = waveMad;
+  target.bgShakeBaseline = bgShake;
+  setPhase(PHASE.READY);
+  showToast('보정 완료! 이제 감시를 시작할 수 있어요.');
+}
+
+// ==========================================================================
+// Monitoring (the heart): normalize, detect, gate, drive the state machine
+// ==========================================================================
+function startMonitoring() {
+  if (!target || phase !== PHASE.READY) return;
+  alarmCtl.ensureAudio();
+  diagnostics.clear();
+  alarmGate.reset();
+  graph = [];
+  const now = performance.now();
+  machine.set(TrackState.TRACKING, now);
+  lastFoundAt = now;
+  lowConfSince = 0;
+  stableFrames = 0;
+  lastKnownX = target.x;
+  lastKnownY = target.y;
+  bgOffsetX = 0; bgOffsetY = 0;
+  target._prevYN = undefined;
+  target.prevTime = undefined;
+  setPhase(PHASE.MONITORING);
+  alarmCtl.requestWakeLock();
+  showToast('입질 감시를 시작했어요.');
+}
+
+function stopMonitoring() {
+  if (phase === PHASE.ALARM) { cancelAlarm(true); return; }
+  if (phase !== PHASE.MONITORING) return;
+  machine.set(TrackState.IDLE, performance.now());
+  setPhase(PHASE.READY);
+  showToast('감시를 잠시 멈췄어요.');
+}
+
+function updateMonitoring(result, now) {
+  const floatHeight = target.floatHeight || 12;
+  const dt = clamp((now - (target.prevTime || now - PROCESS_INTERVAL_MS)) / 1000, 0.03, 0.25);
+  target.prevTime = now;
+
+  // Shake-corrected position relative to the calibrated baseline, normalized to
+  // float-height units. Subtracting the leaky background offset removes camera
+  // jitter; the normalization keeps sensitivity stable across zoom/resolution.
+  const correctedY = (result.found ? result.y : target.y) - bgOffsetY;
+  const yN = (correctedY - target.baselineY) / floatHeight;
+  const prevYN = target._prevYN ?? yN;
+  const correctedDyFrame = yN - prevYN;            // normalized per-frame delta
+  const vN = correctedDyFrame / dt;                // float-heights per second
+  target._prevYN = yN;
+
+  const areaRatio = target.floatArea ? result.area / target.floatArea : 1;
+  const heightRatio = floatHeight ? result.height / floatHeight : 1;
+  const shaking = now < shakingUntil;
+
+  // One unified sample feeds both the bite detector and the diagnostics export.
+  diagnostics.push({
+    t: now, found: result.found,
+    x: target.x / els.analysisCanvas.width,
+    y: target.y / els.analysisCanvas.height,
+    yN, vN, correctedDy: correctedDyFrame,
+    areaRatio, heightRatio,
+    confidence: result.confidence, shaking
   });
 
-  const $ = (id) => document.getElementById(id);
-  const els = {
-    camera: $('camera'),
-    cameraStage: $('cameraStage'),
-    overlay: $('overlay'),
-    analysisCanvas: $('analysisCanvas'),
-    demoCanvas: $('demoCanvas'),
-    cameraEmpty: $('cameraEmpty'),
-    tapGuide: $('tapGuide'),
-    calibrationPanel: $('calibrationPanel'),
-    calibrationText: $('calibrationText'),
-    cameraHud: $('cameraHud'),
-    startCameraBtn: $('startCameraBtn'),
-    startDemoBtn: $('startDemoBtn'),
-    stopCameraBtn: $('stopCameraBtn'),
-    flipCameraBtn: $('flipCameraBtn'),
-    resetTargetBtn: $('resetTargetBtn'),
-    monitorBtn: $('monitorBtn'),
-    statusPill: $('statusPill'),
-    statusLabel: $('statusLabel'),
-    stateText: $('stateText'),
-    confidenceText: $('confidenceText'),
-    fpsText: $('fpsText'),
-    wakeText: $('wakeText'),
-    targetSwatch: $('targetSwatch'),
-    targetColorText: $('targetColorText'),
-    demoControls: $('demoControls'),
-    alarmLayer: $('alarmLayer'),
-    alarmTitle: $('alarmTitle'),
-    alarmReason: $('alarmReason'),
-    alarmScore: $('alarmScore'),
-    stopAlarmBtn: $('stopAlarmBtn'),
-    motionGauge: $('motionGauge'),
-    motionScore: $('motionScore'),
-    verticalMove: $('verticalMove'),
-    confidenceMetric: $('confidenceMetric'),
-    areaMetric: $('areaMetric'),
-    motionChart: $('motionChart'),
-    sensitivity: $('sensitivity'),
-    sensitivityOutput: $('sensitivityOutput'),
-    detectMode: $('detectMode'),
-    nightMode: $('nightMode'),
-    soundEnabled: $('soundEnabled'),
-    vibrationEnabled: $('vibrationEnabled'),
-    waveCorrection: $('waveCorrection'),
-    colorTolerance: $('colorTolerance'),
-    toleranceOutput: $('toleranceOutput'),
-    historyList: $('historyList'),
-    clearHistoryBtn: $('clearHistoryBtn'),
-    installBtn: $('installBtn'),
-    helpBtn: $('helpBtn'),
-    helpModal: $('helpModal'),
-    closeHelpBtn: $('closeHelpBtn'),
-    helpOkayBtn: $('helpOkayBtn'),
-    feedbackModal: $('feedbackModal'),
-    feedbackTrueBtn: $('feedbackTrueBtn'),
-    feedbackFalseBtn: $('feedbackFalseBtn'),
-    feedbackSkipBtn: $('feedbackSkipBtn'),
-    toast: $('toast')
+  const sensitivity = (Number(settings.sensitivity) - 1) / 9;
+  const adaptive = clamp(1 + adaptiveAdjustment, 0.78, 1.34);
+  const bite = analyzeBite(diagnostics.samples, {
+    now, windowMs: BITE.WINDOW_MS,
+    waveMadN: (target.waveMad / floatHeight) * adaptive,
+    detectMode: settings.detectMode, sensitivity
+  });
+
+  // Timers used by the state machine.
+  if (result.found) {
+    lastFoundAt = now;
+    lastKnownX = target.x; lastKnownY = target.y;
+    if (result.confidence >= CONFIDENCE.LOW) {
+      stableFrames += 1;
+      if (!lowConfSince) lowConfSince = 0;
+    } else {
+      stableFrames = 0;
+      if (!lowConfSince) lowConfSince = now;
+    }
+    if (result.confidence >= CONFIDENCE.LOW) lowConfSince = 0;
+  } else {
+    stableFrames = 0;
+  }
+  const lostMs = result.found ? 0 : now - lastFoundAt;
+  const lowConfMs = lowConfSince ? now - lowConfSince : 0;
+  const sinkTrajectory = bite.type === 'sink' && bite.features.sinkScore > 0.5;
+  const reacquireDist = Math.hypot(target.x - lastKnownX, target.y - lastKnownY);
+  const reacquireOk = result.found && result.confidence >= CONFIDENCE.LOW;
+
+  const signals = {
+    found: result.found, confidence: result.confidence, shaking,
+    lostMs, lowConfMs, biteScore: bite.score, sinkTrajectory,
+    reacquireOk, stableFrames, alarmEmitted: false
   };
 
-  const analysisCtx = els.analysisCanvas.getContext('2d', { willReadFrequently: true });
-  const overlayCtx = els.overlay.getContext('2d');
-  const chartCtx = els.motionChart.getContext('2d');
-  const demoCtx = els.demoCanvas.getContext('2d');
+  // Alarm gate: only feed it when the machine says alarms are allowed.
+  const gateOpen = alarmGateOpen(machine.state, signals);
+  const event = alarmGate.update(bite.score, bite.type, now, gateOpen);
+  signals.alarmEmitted = Boolean(event);
 
-  let appState = STATES.IDLE;
-  let stream = null;
-  let videoTrack = null;
-  let facingMode = 'environment';
-  let isDemo = false;
-  let frameLoopToken = 0;
-  let demoLoopToken = 0;
-  let lastProcessAt = 0;
-  let lastFrameAt = 0;
-  let fpsEma = 0;
-  let wakeLock = null;
-  let target = null;
-  let calibrationSamples = [];
-  let motion = createMotionState();
-  let history = loadJson(HISTORY_KEY, []);
-  let adaptiveAdjustment = Number(storage.getItem(ADAPTIVE_KEY) || 0);
-  let currentEventId = null;
-  let feedbackEventId = null;
-  let deferredInstallPrompt = null;
-  let toastTimer = null;
-  let alarmTimer = null;
-  let alarmRepeatTimer = null;
-  let audioContext = null;
-  let demoBite = null;
-  let demoStartTime = 0;
+  const transition = machine.update(signals, now);
+  if (transition.changed && transition.message) showToast(transition.message, 2600);
+  reflectTrackingState(machine.state);
 
-  const settings = Object.assign({
-    sensitivity: 6,
-    detectMode: 'balanced',
-    nightMode: false,
-    soundEnabled: true,
-    vibrationEnabled: true,
-    waveCorrection: true,
-    colorTolerance: 28
-  }, loadJson(SETTINGS_KEY, {}));
+  if (event) triggerAlarm(event, now);
 
-  function createMotionState() {
-    return {
-      baselineY: 0,
-      baselineArea: 0,
-      noisePx: 0.8,
-      prevY: null,
-      prevTime: null,
-      recentDy: [],
-      recentVelocity: [],
-      graph: [],
-      triggerStreak: 0,
-      cooldownUntil: 0,
-      score: 0,
-      dy: 0,
-      thresholdPx: 4,
-      reason: '움직임 없음'
-    };
+  // Slowly fold the *normal* float position into the baseline so gradual wind /
+  // current drift does not look like a sustained bite. Only while calm + found.
+  if (settings.waveCorrection && result.found && result.confidence > 0.4 && bite.score < 0.4 && !shaking) {
+    target.baselineY = lerp(target.baselineY, correctedY, 0.006);
   }
 
-  function clamp(value, min, max) {
-    return Math.min(max, Math.max(min, value));
-  }
+  // --- UI ---------------------------------------------------------------
+  graph.push(clamp(yN, -1.6, 1.6));
+  if (graph.length > 150) graph.shift();
+  els.motionGauge.style.setProperty('--value', Math.round(bite.score * 100));
+  els.motionScore.textContent = Math.round(bite.score * 100);
+  els.verticalMove.textContent = ((correctedY - target.baselineY)).toFixed(1);
+  updateTrackingUi(result);
+  updateDiagPanel(result, bite, yN);
+  drawMotionChart();
+}
 
-  function lerp(a, b, t) {
-    return a + (b - a) * t;
+// Surface LOST / RECOVERING to the status pill during monitoring.
+function reflectTrackingState(state) {
+  if (phase !== PHASE.MONITORING) return;
+  if (state === TrackState.LOST) {
+    els.statusLabel.textContent = '찌 놓침';
+    els.stateText.textContent = '찌를 놓쳤어요. 화면과 조명을 확인해 주세요.';
+  } else if (state === TrackState.RECOVERING) {
+    els.statusLabel.textContent = '재탐색';
+    els.stateText.textContent = '찌를 다시 찾고 있어요…';
+  } else {
+    els.statusLabel.textContent = '감시 중';
+    els.stateText.textContent = PHASE_LABELS[PHASE.MONITORING][1];
   }
+}
 
-  function smoothStep(t) {
-    const x = clamp(t, 0, 1);
-    return x * x * (3 - 2 * x);
+function updateIdleMetrics(result) {
+  updateTrackingUi(result);
+  if (els.diagPanel) updateDiagPanel(result, { score: 0, type: 'none' }, 0);
+}
+
+function updateTrackingUi(result) {
+  const confidence = Math.round(clamp(result.confidence * 100, 0, 100));
+  els.confidenceText.textContent = result.found ? `${confidence}%` : '놓침';
+  els.confidenceMetric.textContent = confidence;
+  const areaBase = target?.floatArea || result.area || 1;
+  const areaPercent = Math.round(clamp(result.area / areaBase * 100, 0, 160));
+  els.areaMetric.textContent = result.found ? areaPercent : 0;
+}
+
+// ==========================================================================
+// Diagnostics panel
+// ==========================================================================
+function updateDiagPanel(result, bite, yN) {
+  if (!els.diagPanel || els.diagPanel.open === false) {
+    // Still keep the export target fresh, but skip DOM writes when collapsed.
   }
+  if (!els.diagState) return;
+  els.diagState.textContent = stateLabel(machine.state);
+  els.diagConfidence.textContent = `${Math.round((result.confidence || 0) * 100)}%`;
+  els.diagPos.textContent = `${Math.round(target?.x || 0)}, ${Math.round(target?.y || 0)}`;
+  els.diagCorrectedDy.textContent = yN.toFixed(3);
+  els.diagBgDy.textContent = `${bgOffsetY.toFixed(2)}px`;
+  els.diagFloatHeight.textContent = `${(target?.floatHeight || 0).toFixed(1)}px`;
+  els.diagCurHeight.textContent = `${(result.height || 0).toFixed(1)}px`;
+  els.diagAreaRatio.textContent = `${Math.round((target?.floatArea ? (result.area / target.floatArea) : 0) * 100)}%`;
+  els.diagBiteScore.textContent = (bite.score || 0).toFixed(2);
+  els.diagFps.textContent = `${Math.round(fpsEma)}`;
+}
 
-  function median(values) {
-    if (!values.length) return 0;
-    const sorted = [...values].sort((a, b) => a - b);
-    const middle = Math.floor(sorted.length / 2);
-    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-  }
+function stateLabel(state) {
+  return {
+    [TrackState.IDLE]: '대기', [TrackState.TRACKING]: '추적', [TrackState.POSSIBLE_BITE]: '입질 의심',
+    [TrackState.LOST]: '놓침', [TrackState.RECOVERING]: '재탐색', [TrackState.ALARM]: '알람'
+  }[state] || state;
+}
 
-  function loadJson(key, fallback) {
-    try {
-      const value = JSON.parse(storage.getItem(key));
-      return value ?? fallback;
-    } catch {
-      return fallback;
+// ==========================================================================
+// Alarm + history
+// ==========================================================================
+function triggerAlarm(event, now) {
+  if (phase !== PHASE.MONITORING) return;
+  const typeLabel = { sink: '찌가 잠겼어요!', lift: '찌가 솟았어요!', twitch: '토독 입질!' }[event.type] || '입질 감지!';
+  const reasonLabel = {
+    sink: '찌가 아래로 가라앉았어요.', lift: '찌가 빠르게 올라왔어요.',
+    twitch: '짧고 빠른 떨림이 이어졌어요.'
+  }[event.type] || '평소 물결보다 큰 움직임이에요.';
+  const score = Math.round(clamp(event.score * 100, 0, 100));
+
+  const record = {
+    id: Date.now(), timestamp: new Date().toISOString(),
+    reason: typeLabel, type: event.type, score, feedback: null
+  };
+  history.unshift(record);
+  history = history.slice(0, 30);
+  saveJson(HISTORY_KEY, history);
+  renderHistory();
+  currentEventId = record.id;
+
+  // Snapshot for local JSON export.
+  lastExportableEvent = diagnostics.exportEvent(
+    { at: event.at, timestamp: record.timestamp, type: event.type, score: event.score },
+    { floatHeight: target.floatHeight, floatArea: target.floatArea, waveMad: target.waveMad },
+    { deviceInfo: navigator.userAgent, analysisFps: Math.round(fpsEma) }
+  );
+  lastExportableEvent.eventId = record.id; // lets feedback back-fill userLabel
+
+  els.alarmTitle.textContent = typeLabel;
+  els.alarmReason.textContent = reasonLabel;
+  els.alarmScore.textContent = score;
+  machine.set(TrackState.ALARM, now);
+  setPhase(PHASE.ALARM);
+  alarmCtl.start({ sound: settings.soundEnabled, vibration: settings.vibrationEnabled });
+  clearTimeout(alarmTimer);
+  alarmTimer = setTimeout(() => cancelAlarm(true), 12000);
+}
+
+function cancelAlarm(showFeedback = true) {
+  clearTimeout(alarmTimer);
+  alarmTimer = null;
+  alarmCtl.stop();
+  if (phase === PHASE.ALARM) {
+    const resume = target && cameraCtl.isActive;
+    machine.resume(Boolean(target), performance.now());
+    setPhase(resume ? PHASE.MONITORING : cameraCtl.isActive ? PHASE.CAMERA : PHASE.IDLE);
+    if (showFeedback && currentEventId) {
+      feedbackEventId = currentEventId;
+      setTimeout(() => showModal(els.feedbackModal), 120);
     }
   }
+  currentEventId = null;
+}
 
-  function saveSettings() {
-    storage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+function renderHistory() {
+  els.historyList.textContent = '';
+  if (!history.length) {
+    const empty = document.createElement('div');
+    empty.className = 'history-empty';
+    empty.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 4v16h16V8l-4-4z"/><path d="M8 13h8M8 17h5M15 4v5h5"/></svg><strong>아직 감지 기록이 없어요</strong><span>입질을 찾으면 시간과 움직임 종류를 남겨드려요.</span>';
+    els.historyList.appendChild(empty);
+    return;
   }
-
-  function applySettingsToUi() {
-    els.sensitivity.value = settings.sensitivity;
-    els.detectMode.value = settings.detectMode;
-    els.nightMode.checked = settings.nightMode;
-    els.soundEnabled.checked = settings.soundEnabled;
-    els.vibrationEnabled.checked = settings.vibrationEnabled;
-    els.waveCorrection.checked = settings.waveCorrection;
-    els.colorTolerance.value = settings.colorTolerance;
-    updateSettingLabels();
-  }
-
-  function updateSettingLabels() {
-    const value = Number(els.sensitivity.value);
-    const label = value <= 3 ? '둔감' : value <= 7 ? '보통' : '민감';
-    els.sensitivityOutput.textContent = `${label} ${value}`;
-    els.toleranceOutput.textContent = els.colorTolerance.value;
-  }
-
-  function setState(next) {
-    appState = next;
-    const labels = {
-      [STATES.IDLE]: ['대기', '카메라를 켜고 찌를 선택하세요.'],
-      [STATES.CAMERA]: ['찌 선택', '화면에서 찌 끝의 선명한 색을 터치하세요.'],
-      [STATES.CALIBRATING]: ['보정 중', '평소 물결 움직임을 잠깐 배우고 있어요.'],
-      [STATES.READY]: ['준비 완료', '감시 시작을 누르면 입질 알람이 켜집니다.'],
-      [STATES.MONITORING]: ['감시 중', '찌 움직임을 실시간으로 살펴보고 있어요.'],
-      [STATES.ALARM]: ['입질!', '큰 움직임이 감지됐어요.']
-    };
-
-    els.statusPill.dataset.status = next;
-    els.statusLabel.textContent = labels[next][0];
-    els.stateText.textContent = labels[next][1];
-    els.cameraEmpty.classList.toggle('hidden', next !== STATES.IDLE);
-    els.tapGuide.classList.toggle('hidden', next !== STATES.CAMERA);
-    els.calibrationPanel.classList.toggle('hidden', next !== STATES.CALIBRATING);
-    els.cameraHud.classList.toggle('hidden', next === STATES.IDLE);
-    els.stopCameraBtn.classList.toggle('hidden', next === STATES.IDLE);
-    els.flipCameraBtn.classList.toggle('hidden', next === STATES.IDLE || isDemo);
-    els.resetTargetBtn.classList.toggle('hidden', !target || next === STATES.IDLE || next === STATES.ALARM);
-    els.demoControls.classList.toggle('hidden', !isDemo || next === STATES.IDLE);
-    els.alarmLayer.classList.toggle('hidden', next !== STATES.ALARM);
-
-    const canMonitor = next === STATES.READY || next === STATES.MONITORING || next === STATES.ALARM;
-    els.monitorBtn.disabled = !canMonitor;
-    els.monitorBtn.classList.toggle('monitoring', next === STATES.MONITORING || next === STATES.ALARM);
-    if (next === STATES.MONITORING) {
-      els.monitorBtn.innerHTML = '<span class="record-dot"></span>감시 멈춤';
-    } else if (next === STATES.ALARM) {
-      els.monitorBtn.innerHTML = '<span class="record-dot"></span>알람 멈춤';
+  history.slice(0, 10).forEach((event) => {
+    const item = document.createElement('article');
+    item.className = 'history-item';
+    const icon = document.createElement('div');
+    icon.className = 'history-icon';
+    icon.innerHTML = (event.type === 'twitch')
+      ? '<svg viewBox="0 0 24 24"><path d="M5 12h2l2-6 3 12 3-9 2 6h2"/></svg>'
+      : '<svg viewBox="0 0 24 24"><path d="M12 3v13m-4-4 4 4 4-4M5 20h14"/></svg>';
+    const main = document.createElement('div');
+    main.className = 'history-main';
+    const title = document.createElement('strong');
+    title.textContent = event.reason;
+    const time = document.createElement('span');
+    time.textContent = formatEventTime(event.timestamp);
+    main.append(title, time);
+    const side = document.createElement('div');
+    side.className = 'history-side';
+    const score = document.createElement('span');
+    score.className = 'history-score';
+    score.textContent = `강도 ${event.score}`;
+    side.appendChild(score);
+    if (event.feedback === true || event.feedback === false) {
+      const label = document.createElement('span');
+      label.className = `feedback-label ${event.feedback ? 'true' : 'false'}`;
+      label.textContent = event.feedback ? '✓ 입질 맞음' : '오탐 표시';
+      side.appendChild(label);
     } else {
-      els.monitorBtn.innerHTML = '<span class="record-dot"></span>감시 시작';
+      const pills = document.createElement('div');
+      pills.className = 'feedback-pills';
+      const yes = document.createElement('button');
+      yes.type = 'button'; yes.dataset.feedbackId = event.id; yes.dataset.feedbackValue = 'true'; yes.textContent = '입질';
+      const no = document.createElement('button');
+      no.type = 'button'; no.dataset.feedbackId = event.id; no.dataset.feedbackValue = 'false'; no.textContent = '오탐';
+      pills.append(yes, no);
+      side.appendChild(pills);
     }
+    item.append(icon, main, side);
+    els.historyList.appendChild(item);
+  });
+}
+
+function formatEventTime(timestamp) {
+  try {
+    return new Intl.DateTimeFormat('ko-KR', {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'
+    }).format(new Date(timestamp));
+  } catch { return timestamp; }
+}
+
+function setFeedback(id, value) {
+  const event = history.find((item) => Number(item.id) === Number(id));
+  if (!event) return;
+  event.feedback = value;
+  // Light, local-only sensitivity nudge from false positives.
+  adaptiveAdjustment = clamp(adaptiveAdjustment + (value ? -0.018 : 0.055), -0.18, 0.32);
+  storage.setItem(ADAPTIVE_KEY, String(adaptiveAdjustment));
+  if (lastExportableEvent && Number(lastExportableEvent.eventId) === Number(id)) {
+    lastExportableEvent.event.userLabel = value ? 'true_positive' : 'false_positive';
+  }
+  saveJson(HISTORY_KEY, history);
+  renderHistory();
+  showToast(value ? '입질로 기록했어요.' : '오탐으로 기록했어요. 민감도를 조금 낮춰 반영합니다.');
+}
+
+// ==========================================================================
+// Overlay + chart drawing
+// ==========================================================================
+function resizeOverlay() {
+  const rect = stageRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(1, Math.round(rect.width * dpr));
+  const height = Math.max(1, Math.round(rect.height * dpr));
+  if (els.overlay.width !== width || els.overlay.height !== height) {
+    els.overlay.width = width;
+    els.overlay.height = height;
+    overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+}
+
+function resizeChart() {
+  const rect = els.motionChart.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(1, Math.round(rect.width * dpr));
+  const height = Math.max(1, Math.round(rect.height * dpr));
+  if (els.motionChart.width !== width || els.motionChart.height !== height) {
+    els.motionChart.width = width;
+    els.motionChart.height = height;
+    chartCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  drawMotionChart();
+}
+
+function clearOverlay() {
+  const rect = stageRect();
+  overlayCtx.clearRect(0, 0, rect.width, rect.height);
+}
+
+function drawOverlay() {
+  const rect = stageRect();
+  overlayCtx.clearRect(0, 0, rect.width, rect.height);
+  if (!cameraCtl.isActive || !target) return;
+  const vr = videoRect();
+  const aw = els.analysisCanvas.width;
+  const ah = els.analysisCanvas.height;
+  const p = mediaToDisplay(target.x / aw * els.camera.videoWidth, target.y / ah * els.camera.videoHeight, vr);
+  const confidence = clamp(target.confidence, 0, 1);
+  const isLost = target.lostFrames > 2 || machine.state === TrackState.LOST;
+  const color = isLost ? '#ff5f70' : confidence > 0.45 ? '#42edc4' : '#ffdb75';
+  const radius = 20;
+
+  overlayCtx.save();
+  overlayCtx.strokeStyle = color;
+  overlayCtx.fillStyle = color;
+  overlayCtx.lineWidth = 1.6;
+  overlayCtx.shadowColor = color;
+  overlayCtx.shadowBlur = 9;
+  overlayCtx.beginPath();
+  overlayCtx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+  overlayCtx.stroke();
+  overlayCtx.shadowBlur = 0;
+  overlayCtx.beginPath();
+  overlayCtx.moveTo(p.x - radius - 9, p.y); overlayCtx.lineTo(p.x - radius + 3, p.y);
+  overlayCtx.moveTo(p.x + radius - 3, p.y); overlayCtx.lineTo(p.x + radius + 9, p.y);
+  overlayCtx.moveTo(p.x, p.y - radius - 9); overlayCtx.lineTo(p.x, p.y - radius + 3);
+  overlayCtx.moveTo(p.x, p.y + radius - 3); overlayCtx.lineTo(p.x, p.y + radius + 9);
+  overlayCtx.stroke();
+  overlayCtx.beginPath();
+  overlayCtx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+  overlayCtx.fill();
+
+  if ((phase === PHASE.READY || phase === PHASE.MONITORING || phase === PHASE.ALARM) && target.baselineY) {
+    const baseY = mediaToDisplay(0, target.baselineY / ah * els.camera.videoHeight, vr).y;
+    overlayCtx.setLineDash([5, 5]);
+    overlayCtx.strokeStyle = 'rgba(255,255,255,.35)';
+    overlayCtx.beginPath();
+    overlayCtx.moveTo(Math.max(vr.x, p.x - 64), baseY);
+    overlayCtx.lineTo(Math.min(vr.x + vr.width, p.x + 64), baseY);
+    overlayCtx.stroke();
+    overlayCtx.setLineDash([]);
   }
 
-  function showToast(message, duration = 2500) {
-    clearTimeout(toastTimer);
-    els.toast.textContent = message;
-    els.toast.classList.remove('hidden');
-    toastTimer = setTimeout(() => els.toast.classList.add('hidden'), duration);
+  const label = isLost ? '찌 놓침' : phase === PHASE.MONITORING ? `감시 ${Math.round(confidence * 100)}%` : `찌 ${Math.round(confidence * 100)}%`;
+  overlayCtx.font = '700 11px system-ui, sans-serif';
+  const textWidth = overlayCtx.measureText(label).width;
+  overlayCtx.fillStyle = 'rgba(3,15,21,.78)';
+  overlayCtx.beginPath();
+  roundedRectPath(overlayCtx, p.x - textWidth / 2 - 8, p.y + 29, textWidth + 16, 23, 7);
+  overlayCtx.fill();
+  overlayCtx.fillStyle = color;
+  overlayCtx.textAlign = 'center';
+  overlayCtx.textBaseline = 'middle';
+  overlayCtx.fillText(label, p.x, p.y + 40.5);
+  overlayCtx.restore();
+}
+
+function roundedRectPath(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
+}
+
+function drawMotionChart() {
+  const rect = els.motionChart.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+  if (!width || !height) return;
+  chartCtx.clearRect(0, 0, width, height);
+  chartCtx.strokeStyle = 'rgba(166, 220, 229, 0.09)';
+  chartCtx.lineWidth = 1;
+  for (let i = 1; i < 4; i += 1) {
+    const y = height * i / 4;
+    chartCtx.beginPath(); chartCtx.moveTo(0, y); chartCtx.lineTo(width, y); chartCtx.stroke();
   }
+  chartCtx.setLineDash([5, 6]);
+  chartCtx.strokeStyle = 'rgba(255, 135, 94, 0.28)';
+  chartCtx.beginPath();
+  chartCtx.moveTo(0, height * 0.18); chartCtx.lineTo(width, height * 0.18);
+  chartCtx.moveTo(0, height * 0.82); chartCtx.lineTo(width, height * 0.82);
+  chartCtx.stroke();
+  chartCtx.setLineDash([]);
+  const values = graph.length ? graph : Array.from({ length: 80 }, (_, i) => Math.sin(i * 0.2) * 0.018);
+  const visible = values.slice(-150);
+  chartCtx.beginPath();
+  visible.forEach((value, index) => {
+    const x = visible.length <= 1 ? 0 : index / (visible.length - 1) * width;
+    const y = height / 2 + clamp(value, -1.6, 1.6) / 1.6 * height * 0.42;
+    if (index === 0) chartCtx.moveTo(x, y); else chartCtx.lineTo(x, y);
+  });
+  const hot = Number(els.motionScore.textContent) >= 70;
+  chartCtx.strokeStyle = hot ? '#ff6b7c' : '#42edc4';
+  chartCtx.lineWidth = 2;
+  chartCtx.shadowColor = hot ? 'rgba(255,107,124,.35)' : 'rgba(66,237,196,.28)';
+  chartCtx.shadowBlur = 8;
+  chartCtx.stroke();
+  chartCtx.shadowBlur = 0;
+  chartCtx.strokeStyle = 'rgba(255,255,255,.15)';
+  chartCtx.lineWidth = 1;
+  chartCtx.beginPath(); chartCtx.moveTo(0, height / 2); chartCtx.lineTo(width, height / 2); chartCtx.stroke();
+}
 
-  function showModal(modal) {
-    modal.classList.remove('hidden');
-    document.body.style.overflow = 'hidden';
-  }
+function resetMetrics() {
+  graph = [];
+  els.motionGauge.style.setProperty('--value', 0);
+  els.motionScore.textContent = '0';
+  els.verticalMove.textContent = '0.0';
+  els.confidenceMetric.textContent = '0';
+  els.areaMetric.textContent = '0';
+  els.confidenceText.textContent = '—';
+  els.fpsText.textContent = '—';
+  drawMotionChart();
+}
 
-  function hideModal(modal) {
-    modal.classList.add('hidden');
-    if (els.helpModal.classList.contains('hidden') && els.feedbackModal.classList.contains('hidden')) {
-      document.body.style.overflow = '';
-    }
-  }
+function resetTarget(showMessage = true) {
+  if (phase === PHASE.ALARM) cancelAlarm(false);
+  target = null;
+  calibrationSamples = [];
+  machine.set(TrackState.IDLE, performance.now());
+  els.targetSwatch.style.background = '';
+  els.targetColorText.textContent = '아직 없음';
+  resetMetrics();
+  clearOverlay();
+  if (cameraCtl.isActive) setPhase(PHASE.CAMERA);
+  if (showMessage) showToast('화면에서 찌 끝을 다시 터치하세요.');
+}
 
-  async function startCamera() {
-    await stopCamera(true);
-    await ensureAudioContext();
+// ==========================================================================
+// Diagnostics export
+// ==========================================================================
+function exportDiagnostics() {
+  if (!lastExportableEvent) { showToast('내보낼 입질 이벤트가 아직 없어요.'); return; }
+  const name = `jjibom-event-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  if (downloadJson(name, lastExportableEvent)) showToast('이벤트 데이터를 내보냈어요.');
+  else showToast('내보내기를 지원하지 않는 환경이에요.');
+}
 
-    if (!navigator.mediaDevices?.getUserMedia) {
-      const reason = window.isSecureContext
-        ? '이 브라우저는 카메라 기능을 지원하지 않아요.'
-        : '카메라는 HTTPS 주소 또는 localhost에서만 사용할 수 있어요.';
-      showToast(reason, 4500);
-      return;
-    }
+// ==========================================================================
+// Events
+// ==========================================================================
+function bindEvents() {
+  els.startCameraBtn.addEventListener('click', startCamera);
+  els.startDemoBtn.addEventListener('click', startDemo);
+  els.stopCameraBtn.addEventListener('click', () => stopEverything());
+  els.flipCameraBtn.addEventListener('click', flipCamera);
+  els.resetTargetBtn.addEventListener('click', () => resetTarget(true));
+  els.overlay.addEventListener('pointerdown', handleTargetPointer);
+  els.monitorBtn.addEventListener('click', () => {
+    if (phase === PHASE.READY) startMonitoring();
+    else if (phase === PHASE.MONITORING || phase === PHASE.ALARM) stopMonitoring();
+  });
+  els.stopAlarmBtn.addEventListener('click', () => cancelAlarm(true));
 
-    els.startCameraBtn.disabled = true;
-    els.startCameraBtn.textContent = '카메라 여는 중…';
-
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30, max: 30 }
-        }
-      });
-      isDemo = false;
-      videoTrack = stream.getVideoTracks()[0] || null;
-      els.camera.srcObject = stream;
-      await waitForVideo();
-      configureCanvases();
-      resetTarget(false);
-      setState(STATES.CAMERA);
-      startFrameLoop();
-      await requestWakeLock();
-      showToast('카메라가 켜졌어요. 찌 끝을 터치하세요.');
-    } catch (error) {
-      console.error(error);
-      let message = '카메라를 열지 못했어요.';
-      if (error?.name === 'NotAllowedError') message = '카메라 권한이 거부됐어요. 브라우저 설정에서 허용해주세요.';
-      if (error?.name === 'NotFoundError') message = '사용할 수 있는 카메라를 찾지 못했어요.';
-      if (error?.name === 'NotReadableError') message = '다른 앱이 카메라를 사용 중일 수 있어요.';
-      showToast(message, 4500);
-      setState(STATES.IDLE);
-    } finally {
-      els.startCameraBtn.disabled = false;
-      els.startCameraBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M14.5 6 13 4H7L5.5 6H3v13h18V6z"/><circle cx="12" cy="12.5" r="4"/></svg>카메라 켜기';
-    }
-  }
-
-  async function startDemo() {
-    await stopCamera(true);
-    await ensureAudioContext();
-
-    if (!els.demoCanvas.captureStream) {
-      showToast('이 브라우저에서는 데모 영상을 만들 수 없어요.');
-      return;
-    }
-
-    isDemo = true;
-    facingMode = 'environment';
-    els.demoCanvas.width = 960;
-    els.demoCanvas.height = 540;
-    demoStartTime = performance.now();
-    startDemoAnimation();
-    stream = els.demoCanvas.captureStream(30);
-    videoTrack = stream.getVideoTracks()[0] || null;
-    els.camera.srcObject = stream;
-
-    try {
-      await waitForVideo();
-      configureCanvases();
-      resetTarget(false);
-      setState(STATES.CAMERA);
-      startFrameLoop();
-      await requestWakeLock();
-      showToast('데모가 시작됐어요. 빨간 찌 끝을 터치하세요.', 3500);
-    } catch (error) {
-      console.error(error);
-      showToast('데모 영상을 시작하지 못했어요.');
-      await stopCamera(true);
-    }
-  }
-
-  function waitForVideo() {
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const finish = async () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        try {
-          await els.camera.play();
-          resolve();
-        } catch (error) {
-          reject(error);
-        }
-      };
-      if (els.camera.readyState >= 2 && els.camera.videoWidth) {
-        finish();
-        return;
-      }
-      els.camera.addEventListener('loadedmetadata', finish, { once: true });
-      const timeout = setTimeout(() => reject(new Error('영상 준비 시간 초과')), 7000);
-    });
-  }
-
-  async function stopCamera(quiet = false) {
-    stopAlarm(false);
-    frameLoopToken += 1;
-    demoLoopToken += 1;
-    demoBite = null;
-
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-    }
-    stream = null;
-    videoTrack = null;
-    els.camera.srcObject = null;
-    isDemo = false;
-    resetTarget(false);
-    clearOverlay();
-    resetMetrics();
-    await releaseWakeLock();
-    setState(STATES.IDLE);
-    if (!quiet) showToast('카메라를 껐어요.');
-  }
-
-  async function flipCamera() {
+  els.cameraSelect?.addEventListener('change', async () => {
     if (isDemo) return;
-    facingMode = facingMode === 'environment' ? 'user' : 'environment';
-    await startCamera();
-  }
+    try { await cameraCtl.start({ deviceId: els.cameraSelect.value }); configureCanvases(); resetTarget(false); setPhase(PHASE.CAMERA); startFrameLoop(); await refreshCameraControls(); }
+    catch (error) { console.error(error); showToast('카메라를 전환하지 못했어요.'); }
+  });
+  els.zoomRange?.addEventListener('input', () => { cameraCtl.setZoom(Number(els.zoomRange.value)); });
 
-  function configureCanvases() {
-    const vw = els.camera.videoWidth || 1280;
-    const vh = els.camera.videoHeight || 720;
-    if (vw >= vh) {
-      els.analysisCanvas.width = ANALYSIS_MAX;
-      els.analysisCanvas.height = Math.max(120, Math.round(ANALYSIS_MAX * vh / vw));
-    } else {
-      els.analysisCanvas.height = ANALYSIS_MAX;
-      els.analysisCanvas.width = Math.max(120, Math.round(ANALYSIS_MAX * vw / vh));
+  els.sensitivity.addEventListener('input', () => { settings.sensitivity = Number(els.sensitivity.value); updateSettingLabels(); saveSettings(); });
+  els.detectMode.addEventListener('change', () => { settings.detectMode = els.detectMode.value; saveSettings(); });
+  els.nightMode.addEventListener('change', () => { settings.nightMode = els.nightMode.checked; saveSettings(); showToast(settings.nightMode ? '야간 LED 모드를 켰어요.' : '일반 색상 모드로 바꿨어요.'); });
+  els.soundEnabled.addEventListener('change', () => { settings.soundEnabled = els.soundEnabled.checked; saveSettings(); if (!settings.soundEnabled) alarmCtl.stop(); else alarmCtl.ensureAudio(); });
+  els.vibrationEnabled.addEventListener('change', () => { settings.vibrationEnabled = els.vibrationEnabled.checked; saveSettings(); });
+  els.waveCorrection.addEventListener('change', () => { settings.waveCorrection = els.waveCorrection.checked; saveSettings(); });
+  els.colorTolerance.addEventListener('input', () => { settings.colorTolerance = Number(els.colorTolerance.value); updateSettingLabels(); saveSettings(); });
+
+  els.demoControls?.addEventListener('click', (event) => {
+    const sceneBtn = event.target.closest('[data-demo-scene]');
+    if (sceneBtn) { demo.setScenario(sceneBtn.dataset.demoScene); flashDemoButton(sceneBtn); if (phase !== PHASE.MONITORING && (sceneBtn.dataset.demoScene === 'sink' || sceneBtn.dataset.demoScene === 'lift' || sceneBtn.dataset.demoScene === 'twitch')) showToast('움직임을 만들었어요. 알람을 보려면 감시 시작을 눌러주세요.'); return; }
+    const biteBtn = event.target.closest('[data-demo-bite]');
+    if (biteBtn) { demo.triggerBite(biteBtn.dataset.demoBite); if (phase !== PHASE.MONITORING) showToast('움직임을 만들었어요. 알람을 보려면 감시 시작을 눌러주세요.'); }
+  });
+
+  els.diagExportBtn?.addEventListener('click', exportDiagnostics);
+
+  els.historyList.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-feedback-id]');
+    if (!button) return;
+    setFeedback(button.dataset.feedbackId, button.dataset.feedbackValue === 'true');
+  });
+  els.clearHistoryBtn.addEventListener('click', () => {
+    if (!history.length) return;
+    if (window.confirm('입질 기록을 모두 지울까요?')) { history = []; saveJson(HISTORY_KEY, history); renderHistory(); showToast('기록을 모두 지웠어요.'); }
+  });
+
+  els.helpBtn.addEventListener('click', () => showModal(els.helpModal));
+  els.closeHelpBtn.addEventListener('click', () => hideModal(els.helpModal));
+  els.helpOkayBtn.addEventListener('click', () => hideModal(els.helpModal));
+  els.helpModal.addEventListener('click', (event) => { if (event.target === els.helpModal) hideModal(els.helpModal); });
+
+  els.feedbackTrueBtn.addEventListener('click', () => { if (feedbackEventId) setFeedback(feedbackEventId, true); feedbackEventId = null; hideModal(els.feedbackModal); });
+  els.feedbackFalseBtn.addEventListener('click', () => { if (feedbackEventId) setFeedback(feedbackEventId, false); feedbackEventId = null; hideModal(els.feedbackModal); });
+  els.feedbackSkipBtn.addEventListener('click', () => { feedbackEventId = null; hideModal(els.feedbackModal); });
+
+  window.addEventListener('beforeinstallprompt', (event) => { event.preventDefault(); deferredInstallPrompt = event; els.installBtn.classList.remove('hidden'); });
+  els.installBtn.addEventListener('click', async () => {
+    if (!deferredInstallPrompt) { showToast('브라우저 메뉴에서 “홈 화면에 추가”를 선택해주세요.'); return; }
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    els.installBtn.classList.add('hidden');
+  });
+  window.addEventListener('appinstalled', () => { deferredInstallPrompt = null; els.installBtn.classList.add('hidden'); showToast('찌봄을 홈 화면에 설치했어요.'); });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      alarmCtl.reacquireIfNeeded();
+    } else if (phase === PHASE.MONITORING) {
+      // The OS can throttle/stop a backgrounded tab's camera analysis.
+      showToast('화면이 꺼지거나 다른 앱으로 가면 감시가 멈출 수 있어요.', 3500);
     }
-    resizeOverlay();
-    resizeChart();
-  }
+  });
+  window.addEventListener('resize', () => { resizeOverlay(); resizeChart(); drawOverlay(); });
+  window.addEventListener('orientationchange', () => setTimeout(() => { configureCanvases(); drawOverlay(); }, 250));
+  window.addEventListener('beforeunload', () => { cameraCtl.stop(); });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { hideModal(els.helpModal); hideModal(els.feedbackModal); if (phase === PHASE.ALARM) cancelAlarm(true); }
+  });
+}
 
-  function resizeOverlay() {
-    const rect = els.cameraStage.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const width = Math.max(1, Math.round(rect.width * dpr));
-    const height = Math.max(1, Math.round(rect.height * dpr));
-    if (els.overlay.width !== width || els.overlay.height !== height) {
-      els.overlay.width = width;
-      els.overlay.height = height;
-      overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
-  }
+function flashDemoButton(button) {
+  button.classList.add('active');
+  setTimeout(() => button.classList.remove('active'), 600);
+}
 
-  function resizeChart() {
-    const rect = els.motionChart.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const width = Math.max(1, Math.round(rect.width * dpr));
-    const height = Math.max(1, Math.round(rect.height * dpr));
-    if (els.motionChart.width !== width || els.motionChart.height !== height) {
-      els.motionChart.width = width;
-      els.motionChart.height = height;
-      chartCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
-    drawMotionChart();
-  }
-
-  function getVideoDisplayRect() {
-    const stage = els.cameraStage.getBoundingClientRect();
-    const vw = els.camera.videoWidth || 16;
-    const vh = els.camera.videoHeight || 9;
-    const scale = Math.min(stage.width / vw, stage.height / vh);
-    const width = vw * scale;
-    const height = vh * scale;
-    return {
-      x: (stage.width - width) / 2,
-      y: (stage.height - height) / 2,
-      width,
-      height
-    };
-  }
-
-  function startFrameLoop() {
-    const token = ++frameLoopToken;
-    lastProcessAt = 0;
-    lastFrameAt = 0;
-    fpsEma = 0;
-
-    const callback = (now) => {
-      if (token !== frameLoopToken || !stream) return;
-      if (!lastProcessAt || now - lastProcessAt >= PROCESS_INTERVAL) {
-        processFrame(now);
-        lastProcessAt = now;
-      }
-      if (typeof els.camera.requestVideoFrameCallback === 'function') {
-        els.camera.requestVideoFrameCallback(callback);
-      } else {
-        requestAnimationFrame(callback);
-      }
-    };
-
-    if (typeof els.camera.requestVideoFrameCallback === 'function') {
-      els.camera.requestVideoFrameCallback(callback);
-    } else {
-      requestAnimationFrame(callback);
-    }
-  }
-
-  function processFrame(now) {
-    if (!els.camera.videoWidth || !els.analysisCanvas.width) return;
-    try {
-      analysisCtx.drawImage(els.camera, 0, 0, els.analysisCanvas.width, els.analysisCanvas.height);
-    } catch {
-      return;
-    }
-
-    if (lastFrameAt) {
-      const instantFps = 1000 / Math.max(1, now - lastFrameAt);
-      fpsEma = fpsEma ? lerp(fpsEma, instantFps, 0.12) : instantFps;
-      els.fpsText.textContent = `${Math.round(fpsEma)}`;
-    }
-    lastFrameAt = now;
-
-    if (target) {
-      const image = analysisCtx.getImageData(0, 0, els.analysisCanvas.width, els.analysisCanvas.height);
-      const result = trackTarget(image);
-      if (appState === STATES.CALIBRATING) updateCalibration(result);
-      if (appState === STATES.MONITORING) updateMotion(result, now);
-      updateTrackingUi(result);
-    }
-
-    drawOverlay();
-  }
-
-  function handleTargetPointer(event) {
-    if (!stream || appState === STATES.IDLE || appState === STATES.ALARM) return;
-    if (appState === STATES.MONITORING) {
-      showToast('감시를 먼저 멈춘 뒤 찌를 다시 선택해주세요.');
-      return;
-    }
-    if (appState === STATES.CALIBRATING) return;
-
-    const stageRect = els.cameraStage.getBoundingClientRect();
-    const videoRect = getVideoDisplayRect();
-    const x = event.clientX - stageRect.left;
-    const y = event.clientY - stageRect.top;
-    if (x < videoRect.x || x > videoRect.x + videoRect.width || y < videoRect.y || y > videoRect.y + videoRect.height) {
-      showToast('영상 안쪽의 찌를 터치해주세요.');
-      return;
-    }
-
-    const ax = (x - videoRect.x) / videoRect.width * els.analysisCanvas.width;
-    const ay = (y - videoRect.y) / videoRect.height * els.analysisCanvas.height;
-    selectTarget(ax, ay);
-  }
-
-  function selectTarget(x, y) {
-    try {
-      analysisCtx.drawImage(els.camera, 0, 0, els.analysisCanvas.width, els.analysisCanvas.height);
-      const sample = sampleColor(x, y);
-      if (!sample) {
-        showToast('색을 읽지 못했어요. 다시 터치해주세요.');
-        return;
-      }
-
-      target = {
-        x,
-        y,
-        rgb: sample.rgb,
-        hsv: sample.hsv,
-        initialArea: 0,
-        baselineArea: 0,
-        baselineY: y,
-        area: 0,
-        rawArea: 0,
-        confidence: 1,
-        lostFrames: 0
-      };
-      calibrationSamples = [];
-      motion = createMotionState();
-      updateTargetColorUi();
-      setState(STATES.CALIBRATING);
-      showToast('찌를 찾았어요. 잠깐만 그대로 두세요.');
-    } catch (error) {
-      console.error(error);
-      showToast('찌 색을 읽는 중 문제가 생겼어요.');
-    }
-  }
-
-  function sampleColor(cx, cy) {
-    const radius = 5;
-    const x0 = clamp(Math.floor(cx - radius), 0, els.analysisCanvas.width - 1);
-    const y0 = clamp(Math.floor(cy - radius), 0, els.analysisCanvas.height - 1);
-    const x1 = clamp(Math.ceil(cx + radius), 1, els.analysisCanvas.width);
-    const y1 = clamp(Math.ceil(cy + radius), 1, els.analysisCanvas.height);
-    const image = analysisCtx.getImageData(x0, y0, x1 - x0, y1 - y0);
-    const candidates = [];
-
-    for (let i = 0; i < image.data.length; i += 4) {
-      const r = image.data[i];
-      const g = image.data[i + 1];
-      const b = image.data[i + 2];
-      const hsv = rgbToHsv(r, g, b);
-      const centerBoost = hsv.s * 0.7 + hsv.v * 0.3;
-      candidates.push({ r, g, b, hsv, centerBoost });
-    }
-    if (!candidates.length) return null;
-
-    candidates.sort((a, b) => b.centerBoost - a.centerBoost);
-    const keep = candidates.slice(0, Math.max(9, Math.floor(candidates.length * 0.42)));
-    const rgb = {
-      r: Math.round(median(keep.map((p) => p.r))),
-      g: Math.round(median(keep.map((p) => p.g))),
-      b: Math.round(median(keep.map((p) => p.b)))
-    };
-    return { rgb, hsv: rgbToHsv(rgb.r, rgb.g, rgb.b) };
-  }
-
-  function rgbToHsv(r, g, b) {
-    const rn = r / 255;
-    const gn = g / 255;
-    const bn = b / 255;
-    const max = Math.max(rn, gn, bn);
-    const min = Math.min(rn, gn, bn);
-    const delta = max - min;
-    let h = 0;
-    if (delta) {
-      if (max === rn) h = 60 * (((gn - bn) / delta) % 6);
-      else if (max === gn) h = 60 * ((bn - rn) / delta + 2);
-      else h = 60 * ((rn - gn) / delta + 4);
-    }
-    if (h < 0) h += 360;
-    return { h, s: max === 0 ? 0 : delta / max, v: max };
-  }
-
-  function hueDistance(a, b) {
-    const diff = Math.abs(a - b);
-    return Math.min(diff, 360 - diff);
-  }
-
-  function trackTarget(image) {
-    const width = image.width;
-    const height = image.height;
-    const data = image.data;
-    const tolerance = Number(settings.colorTolerance);
-    const lost = target.lostFrames || 0;
-    const searchRadius = lost > 7 ? Math.max(width, height) : clamp(52 + lost * 15, 52, 135);
-    const x0 = lost > 7 ? 0 : Math.max(0, Math.floor(target.x - searchRadius));
-    const x1 = lost > 7 ? width : Math.min(width, Math.ceil(target.x + searchRadius));
-    const y0 = lost > 7 ? 0 : Math.max(0, Math.floor(target.y - searchRadius));
-    const y1 = lost > 7 ? height : Math.min(height, Math.ceil(target.y + searchRadius));
-    const step = lost > 7 ? 3 : 2;
-    const sigma = lost > 7 ? Math.max(width, height) * 0.42 : searchRadius * 0.65;
-    const sigma2 = 2 * sigma * sigma;
-
-    let sumW = 0;
-    let sumX = 0;
-    let sumY = 0;
-    let count = 0;
-    let qualitySum = 0;
-
-    for (let y = y0; y < y1; y += step) {
-      for (let x = x0; x < x1; x += step) {
-        const idx = (y * width + x) * 4;
-        const r = data[idx];
-        const g = data[idx + 1];
-        const b = data[idx + 2];
-        const hsv = rgbToHsv(r, g, b);
-        let colorQuality = 0;
-        let matched = false;
-
-        if (target.hsv.s < 0.16) {
-          const dr = r - target.rgb.r;
-          const dg = g - target.rgb.g;
-          const db = b - target.rgb.b;
-          const distance = Math.sqrt(dr * dr + dg * dg + db * db);
-          const maxDistance = tolerance * 4.2;
-          matched = distance <= maxDistance;
-          colorQuality = 1 - distance / maxDistance;
-        } else {
-          const hd = hueDistance(hsv.h, target.hsv.h);
-          const sd = Math.abs(hsv.s - target.hsv.s);
-          const vd = Math.abs(hsv.v - target.hsv.v);
-          const hueLimit = settings.nightMode ? tolerance * 1.35 : tolerance;
-          const satLimit = settings.nightMode ? 0.68 : 0.52;
-          const valueLimit = settings.nightMode ? 0.58 : 0.62;
-          const brightEnough = !settings.nightMode || hsv.v >= Math.max(0.40, target.hsv.v - 0.42);
-          matched = brightEnough && hd <= hueLimit && sd <= satLimit && vd <= valueLimit;
-          colorQuality = 1 - (hd / hueLimit * 0.58 + sd / satLimit * 0.22 + vd / valueLimit * 0.20);
-        }
-
-        if (!matched || colorQuality <= 0) continue;
-        const dx = x - target.x;
-        const dy = y - target.y;
-        const spatialWeight = Math.exp(-(dx * dx + dy * dy) / sigma2);
-        const weight = Math.max(0.03, colorQuality) * (lost > 7 ? 0.72 + spatialWeight * 0.28 : 0.18 + spatialWeight * 0.82);
-        sumW += weight;
-        sumX += x * weight;
-        sumY += y * weight;
-        qualitySum += colorQuality;
-        count += 1;
-      }
-    }
-
-    if (count < 4 || sumW <= 0.01) {
-      target.lostFrames += 1;
-      target.confidence *= 0.72;
-      target.rawArea = 0;
-      return {
-        found: false,
-        x: target.x,
-        y: target.y,
-        area: 0,
-        confidence: target.confidence,
-        lostFrames: target.lostFrames
-      };
-    }
-
-    const foundX = sumX / sumW;
-    const foundY = sumY / sumW;
-    const rawArea = count * step * step;
-    if (!target.initialArea) target.initialArea = rawArea;
-    const expectedArea = target.baselineArea || target.initialArea || rawArea;
-    const areaQuality = clamp(rawArea / Math.max(12, expectedArea * 0.55), 0, 1);
-    const colorQuality = clamp(qualitySum / count, 0, 1);
-    const confidence = clamp(colorQuality * 0.58 + areaQuality * 0.42, 0, 1);
-    const smoothing = confidence > 0.62 ? 0.54 : confidence > 0.35 ? 0.38 : 0.24;
-
-    target.x = lerp(target.x, foundX, smoothing);
-    target.y = lerp(target.y, foundY, smoothing);
-    target.rawArea = rawArea;
-    target.area = target.area ? lerp(target.area, rawArea, 0.36) : rawArea;
-    target.confidence = confidence;
-    target.lostFrames = 0;
-
-    return {
-      found: true,
-      x: target.x,
-      y: target.y,
-      area: rawArea,
-      confidence,
-      lostFrames: 0
-    };
-  }
-
-  function updateCalibration(result) {
-    if (!result.found || result.confidence < 0.22) {
-      if (target.lostFrames > 18) {
-        showToast('찌를 놓쳤어요. 더 선명한 부분을 다시 선택해주세요.', 3500);
-        resetTarget(true);
-      }
-      return;
-    }
-
-    calibrationSamples.push({ y: result.y, area: result.area });
-    const progress = clamp(calibrationSamples.length / CALIBRATION_FRAMES, 0, 1);
-    els.calibrationText.textContent = `폰을 움직이지 말아주세요 · ${Math.round(progress * 100)}%`;
-
-    if (calibrationSamples.length >= CALIBRATION_FRAMES) {
-      const ys = calibrationSamples.map((item) => item.y);
-      const areas = calibrationSamples.map((item) => item.area);
-      const baselineY = median(ys);
-      const baselineArea = Math.max(8, median(areas));
-      const deviations = ys.map((value) => Math.abs(value - baselineY));
-      const noisePx = Math.max(0.55, median(deviations) * 1.4826);
-
-      target.baselineY = baselineY;
-      target.baselineArea = baselineArea;
-      target.noisePx = noisePx;
-      motion = createMotionState();
-      motion.baselineY = baselineY;
-      motion.baselineArea = baselineArea;
-      motion.noisePx = noisePx;
-      motion.prevY = target.y;
-      setState(STATES.READY);
-      showToast('보정 완료! 이제 감시를 시작할 수 있어요.');
-    }
-  }
-
-  function startMonitoring() {
-    if (!target || appState !== STATES.READY) return;
-    ensureAudioContext();
-    motion = createMotionState();
-    motion.baselineY = target.baselineY || target.y;
-    motion.baselineArea = target.baselineArea || target.area || target.initialArea;
-    motion.noisePx = Math.max(0.55, target.noisePx || 0.8);
-    motion.prevY = target.y;
-    motion.prevTime = performance.now();
-    setState(STATES.MONITORING);
-    requestWakeLock();
-    showToast('입질 감시를 시작했어요.');
-  }
-
-  function stopMonitoring() {
-    if (appState === STATES.ALARM) {
-      stopAlarm(true);
-      return;
-    }
-    if (appState !== STATES.MONITORING) return;
-    motion.triggerStreak = 0;
-    setState(STATES.READY);
-    showToast('감시를 잠시 멈췄어요.');
-  }
-
-  function updateMotion(result, now) {
-    const sensitivityT = (Number(settings.sensitivity) - 1) / 9;
-    const adaptiveFactor = clamp(1 + adaptiveAdjustment, 0.78, 1.34);
-    const baseThreshold = lerp(8.2, 1.75, sensitivityT) * adaptiveFactor;
-    const noiseThreshold = motion.noisePx * lerp(5.0, 2.8, sensitivityT);
-    const thresholdPx = Math.max(baseThreshold, noiseThreshold);
-    const velocityThreshold = lerp(46, 11, sensitivityT) * adaptiveFactor;
-    const dt = clamp((now - (motion.prevTime || now - PROCESS_INTERVAL)) / 1000, 0.03, 0.25);
-    const currentY = result.found ? result.y : (motion.prevY ?? motion.baselineY);
-    const dy = currentY - motion.baselineY;
-    const velocity = result.found ? (currentY - (motion.prevY ?? currentY)) / dt : 0;
-    const areaRatio = motion.baselineArea > 0 ? result.area / motion.baselineArea : 1;
-    const areaDrop = clamp(1 - areaRatio, 0, 1);
-
-    motion.recentDy.push(dy);
-    motion.recentVelocity.push(velocity);
-    if (motion.recentDy.length > 18) motion.recentDy.shift();
-    if (motion.recentVelocity.length > 18) motion.recentVelocity.shift();
-
-    const recentRange = motion.recentDy.length > 4
-      ? Math.max(...motion.recentDy) - Math.min(...motion.recentDy)
-      : 0;
-    let signChanges = 0;
-    for (let i = 2; i < motion.recentVelocity.length; i += 1) {
-      const a = motion.recentVelocity[i - 1];
-      const b = motion.recentVelocity[i];
-      if (Math.abs(a) > velocityThreshold * 0.18 && Math.abs(b) > velocityThreshold * 0.18 && Math.sign(a) !== Math.sign(b)) {
-        signChanges += 1;
-      }
-    }
-
-    let displacementRatio = Math.abs(dy) / thresholdPx;
-    let speedRatio = Math.abs(velocity) / velocityThreshold;
-    if (settings.detectMode === 'sink') {
-      displacementRatio = Math.max(0, dy) / thresholdPx;
-      speedRatio = Math.max(0, velocity) / velocityThreshold;
-    } else if (settings.detectMode === 'lift') {
-      displacementRatio = Math.max(0, -dy) / thresholdPx;
-      speedRatio = Math.max(0, -velocity) / velocityThreshold;
-    }
-
-    const twitchRatio = (recentRange / Math.max(1, thresholdPx * 1.45)) * clamp(signChanges / 3, 0, 1.2);
-    const areaRatioScore = areaDrop / (settings.detectMode === 'sink' ? 0.34 : 0.46);
-    const lostRatio = result.lostFrames >= 3 ? clamp((result.lostFrames - 1) / 5, 0, 1.35) : 0;
-
-    let rawRatio;
-    if (settings.detectMode === 'twitch') {
-      rawRatio = Math.max(twitchRatio * 1.12, speedRatio * 0.5, displacementRatio * 0.38, areaRatioScore * 0.42);
-    } else {
-      rawRatio = Math.max(displacementRatio, speedRatio * 0.82, twitchRatio * 0.92, areaRatioScore, lostRatio);
-    }
-
-    const score = Math.round(clamp(rawRatio * 80, 0, 100));
-    let reason = '움직임 없음';
-    const components = [
-      ['잠김 또는 사라짐', Math.max(areaRatioScore, lostRatio)],
-      ['토독 떨림 감지', twitchRatio * (settings.detectMode === 'twitch' ? 1.12 : 0.92)],
-      [dy >= 0 ? '급하강 감지' : '급상승 감지', Math.max(displacementRatio, speedRatio * 0.82)]
-    ].sort((a, b) => b[1] - a[1]);
-    if (rawRatio > 0.28) reason = components[0][0];
-
-    motion.score = score;
-    motion.dy = dy;
-    motion.thresholdPx = thresholdPx;
-    motion.reason = reason;
-    motion.prevY = currentY;
-    motion.prevTime = now;
-    motion.graph.push(clamp(dy / Math.max(1, thresholdPx * 2.2), -1.5, 1.5));
-    if (motion.graph.length > 150) motion.graph.shift();
-
-    if (settings.waveCorrection && result.found && result.confidence > 0.35 && rawRatio < 0.42) {
-      motion.baselineY = lerp(motion.baselineY, result.y, 0.007);
-      motion.baselineArea = lerp(motion.baselineArea, result.area, 0.004);
-    }
-
-    const hardSink = (areaDrop > 0.68 && result.lostFrames >= 1) || result.lostFrames >= 5;
-    if ((rawRatio >= 1 || hardSink) && now >= motion.cooldownUntil) {
-      motion.triggerStreak += 1;
-    } else {
-      motion.triggerStreak = Math.max(0, motion.triggerStreak - 1);
-    }
-
-    if (motion.triggerStreak >= (hardSink ? 2 : 3)) {
-      motion.triggerStreak = 0;
-      motion.cooldownUntil = now + 8500;
-      triggerAlarm(reason === '움직임 없음' ? '큰 움직임 감지' : reason, Math.max(score, hardSink ? 94 : 82));
-    }
-
-    updateMotionUi();
-  }
-
-  function updateTrackingUi(result) {
-    const confidence = Math.round(clamp(result.confidence * 100, 0, 100));
-    els.confidenceText.textContent = result.found ? `${confidence}%` : '놓침';
-    els.confidenceMetric.textContent = confidence;
-    const areaBase = target?.baselineArea || target?.initialArea || result.area || 1;
-    const areaPercent = Math.round(clamp(result.area / areaBase * 100, 0, 160));
-    els.areaMetric.textContent = result.found ? areaPercent : 0;
-    if (appState !== STATES.MONITORING && appState !== STATES.ALARM) {
-      els.verticalMove.textContent = target?.baselineY ? (target.y - target.baselineY).toFixed(1) : '0.0';
-    }
-  }
-
-  function updateMotionUi() {
-    const displayScore = clamp(motion.score, 0, 100);
-    els.motionGauge.style.setProperty('--value', displayScore);
-    els.motionScore.textContent = displayScore;
-    els.verticalMove.textContent = motion.dy.toFixed(1);
-    drawMotionChart();
-  }
-
-  function resetMetrics() {
-    motion = createMotionState();
-    els.motionGauge.style.setProperty('--value', 0);
-    els.motionScore.textContent = '0';
-    els.verticalMove.textContent = '0.0';
-    els.confidenceMetric.textContent = '0';
-    els.areaMetric.textContent = '0';
-    els.confidenceText.textContent = '—';
-    els.fpsText.textContent = '—';
-    drawMotionChart();
-  }
-
-  function drawMotionChart() {
-    const rect = els.motionChart.getBoundingClientRect();
-    const width = rect.width;
-    const height = rect.height;
-    if (!width || !height) return;
-    chartCtx.clearRect(0, 0, width, height);
-
-    chartCtx.strokeStyle = 'rgba(166, 220, 229, 0.09)';
-    chartCtx.lineWidth = 1;
-    for (let i = 1; i < 4; i += 1) {
-      const y = height * i / 4;
-      chartCtx.beginPath();
-      chartCtx.moveTo(0, y);
-      chartCtx.lineTo(width, y);
-      chartCtx.stroke();
-    }
-
-    chartCtx.setLineDash([5, 6]);
-    chartCtx.strokeStyle = 'rgba(255, 135, 94, 0.28)';
-    chartCtx.beginPath();
-    chartCtx.moveTo(0, height * 0.18);
-    chartCtx.lineTo(width, height * 0.18);
-    chartCtx.moveTo(0, height * 0.82);
-    chartCtx.lineTo(width, height * 0.82);
-    chartCtx.stroke();
-    chartCtx.setLineDash([]);
-
-    const values = motion.graph.length ? motion.graph : Array.from({ length: 80 }, (_, i) => Math.sin(i * 0.2) * 0.018);
-    const maxPoints = 150;
-    const visible = values.slice(-maxPoints);
-    chartCtx.beginPath();
-    visible.forEach((value, index) => {
-      const x = visible.length <= 1 ? 0 : index / (visible.length - 1) * width;
-      const y = height / 2 + clamp(value, -1.5, 1.5) / 1.5 * height * 0.42;
-      if (index === 0) chartCtx.moveTo(x, y);
-      else chartCtx.lineTo(x, y);
+// ==========================================================================
+// Service worker + update banner
+// ==========================================================================
+async function registerServiceWorker() {
+  if (!('serviceWorker' in navigator) || !(window.isSecureContext || location.hostname === 'localhost')) return;
+  try {
+    const registration = await navigator.serviceWorker.register('./sw.js');
+    registration.addEventListener('updatefound', () => {
+      const installing = registration.installing;
+      if (!installing) return;
+      installing.addEventListener('statechange', () => {
+        if (installing.state === 'installed' && navigator.serviceWorker.controller) showUpdateBanner(registration);
+      });
     });
-    chartCtx.strokeStyle = motion.score >= 80 ? '#ff6b7c' : '#42edc4';
-    chartCtx.lineWidth = 2;
-    chartCtx.shadowColor = motion.score >= 80 ? 'rgba(255,107,124,.35)' : 'rgba(66,237,196,.28)';
-    chartCtx.shadowBlur = 8;
-    chartCtx.stroke();
-    chartCtx.shadowBlur = 0;
-
-    chartCtx.strokeStyle = 'rgba(255,255,255,.15)';
-    chartCtx.lineWidth = 1;
-    chartCtx.beginPath();
-    chartCtx.moveTo(0, height / 2);
-    chartCtx.lineTo(width, height / 2);
-    chartCtx.stroke();
-  }
-
-  function drawOverlay() {
-    const stageRect = els.cameraStage.getBoundingClientRect();
-    overlayCtx.clearRect(0, 0, stageRect.width, stageRect.height);
-    if (!stream || !target) return;
-
-    const videoRect = getVideoDisplayRect();
-    const x = videoRect.x + target.x / els.analysisCanvas.width * videoRect.width;
-    const y = videoRect.y + target.y / els.analysisCanvas.height * videoRect.height;
-    const confidence = clamp(target.confidence, 0, 1);
-    const isLost = target.lostFrames > 2;
-    const color = isLost ? '#ff5f70' : confidence > 0.45 ? '#42edc4' : '#ffdb75';
-    const radius = 20;
-
-    overlayCtx.save();
-    overlayCtx.strokeStyle = color;
-    overlayCtx.fillStyle = color;
-    overlayCtx.lineWidth = 1.6;
-    overlayCtx.shadowColor = color;
-    overlayCtx.shadowBlur = 9;
-
-    overlayCtx.beginPath();
-    overlayCtx.arc(x, y, radius, 0, Math.PI * 2);
-    overlayCtx.stroke();
-    overlayCtx.shadowBlur = 0;
-    overlayCtx.beginPath();
-    overlayCtx.moveTo(x - radius - 9, y);
-    overlayCtx.lineTo(x - radius + 3, y);
-    overlayCtx.moveTo(x + radius - 3, y);
-    overlayCtx.lineTo(x + radius + 9, y);
-    overlayCtx.moveTo(x, y - radius - 9);
-    overlayCtx.lineTo(x, y - radius + 3);
-    overlayCtx.moveTo(x, y + radius - 3);
-    overlayCtx.lineTo(x, y + radius + 9);
-    overlayCtx.stroke();
-    overlayCtx.beginPath();
-    overlayCtx.arc(x, y, 2.5, 0, Math.PI * 2);
-    overlayCtx.fill();
-
-    if ((appState === STATES.READY || appState === STATES.MONITORING || appState === STATES.ALARM) && motion.baselineY) {
-      const baselineY = videoRect.y + motion.baselineY / els.analysisCanvas.height * videoRect.height;
-      overlayCtx.setLineDash([5, 5]);
-      overlayCtx.strokeStyle = 'rgba(255,255,255,.35)';
-      overlayCtx.beginPath();
-      overlayCtx.moveTo(Math.max(videoRect.x, x - 64), baselineY);
-      overlayCtx.lineTo(Math.min(videoRect.x + videoRect.width, x + 64), baselineY);
-      overlayCtx.stroke();
-      overlayCtx.setLineDash([]);
-    }
-
-    const label = isLost ? '찌 놓침' : appState === STATES.MONITORING ? `감시 ${Math.round(confidence * 100)}%` : `찌 ${Math.round(confidence * 100)}%`;
-    overlayCtx.font = '700 11px system-ui, sans-serif';
-    const textWidth = overlayCtx.measureText(label).width;
-    overlayCtx.fillStyle = 'rgba(3,15,21,.78)';
-    overlayCtx.beginPath();
-    roundedRectPath(overlayCtx, x - textWidth / 2 - 8, y + 29, textWidth + 16, 23, 7);
-    overlayCtx.fill();
-    overlayCtx.fillStyle = color;
-    overlayCtx.textAlign = 'center';
-    overlayCtx.textBaseline = 'middle';
-    overlayCtx.fillText(label, x, y + 40.5);
-    overlayCtx.restore();
-  }
-
-  function roundedRectPath(ctx, x, y, width, height, radius) {
-    const r = Math.min(radius, width / 2, height / 2);
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + width, y, x + width, y + height, r);
-    ctx.arcTo(x + width, y + height, x, y + height, r);
-    ctx.arcTo(x, y + height, x, y, r);
-    ctx.arcTo(x, y, x + width, y, r);
-    ctx.closePath();
-  }
-
-  function clearOverlay() {
-    const rect = els.cameraStage.getBoundingClientRect();
-    overlayCtx.clearRect(0, 0, rect.width, rect.height);
-  }
-
-  function resetTarget(showMessage = true) {
-    if (appState === STATES.ALARM) stopAlarm(false);
-    target = null;
-    calibrationSamples = [];
-    motion = createMotionState();
-    els.targetSwatch.style.background = '';
-    els.targetColorText.textContent = '아직 없음';
-    resetMetrics();
-    clearOverlay();
-    if (stream) setState(STATES.CAMERA);
-    if (showMessage) showToast('화면에서 찌 끝을 다시 터치하세요.');
-  }
-
-  function updateTargetColorUi() {
-    if (!target) return;
-    const { r, g, b } = target.rgb;
-    const hex = `#${[r, g, b].map((value) => value.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
-    els.targetSwatch.style.background = `rgb(${r}, ${g}, ${b})`;
-    els.targetColorText.textContent = `${colorName(target.hsv)} · ${hex}`;
-  }
-
-  function colorName(hsv) {
-    if (hsv.v < 0.18) return '어두운색';
-    if (hsv.s < 0.15) return hsv.v > 0.78 ? '흰색 계열' : '회색 계열';
-    const h = hsv.h;
-    if (h < 16 || h >= 345) return '빨강 계열';
-    if (h < 46) return '주황 계열';
-    if (h < 72) return '노랑 계열';
-    if (h < 165) return '초록 계열';
-    if (h < 205) return '청록 계열';
-    if (h < 255) return '파랑 계열';
-    if (h < 300) return '보라 계열';
-    return '분홍 계열';
-  }
-
-  function triggerAlarm(reason, score) {
-    if (appState !== STATES.MONITORING) return;
-    const event = {
-      id: Date.now(),
-      timestamp: new Date().toISOString(),
-      reason,
-      score: Math.round(score),
-      feedback: null
-    };
-    history.unshift(event);
-    history = history.slice(0, 30);
-    saveHistory();
-    renderHistory();
-    currentEventId = event.id;
-    els.alarmTitle.textContent = reason.includes('잠김') ? '찌가 잠겼어요!' : '입질 감지!';
-    els.alarmReason.textContent = reason === '토독 떨림 감지' ? '짧고 빠른 떨림이 이어졌어요.' : '평소 물결보다 큰 움직임이에요.';
-    els.alarmScore.textContent = event.score;
-    setState(STATES.ALARM);
-    playAlarm();
-    alarmTimer = setTimeout(() => stopAlarm(true), 12000);
-  }
-
-  function stopAlarm(showFeedback = true) {
-    clearTimeout(alarmTimer);
-    alarmTimer = null;
-    stopAlarmSound();
-    if (navigator.vibrate) navigator.vibrate(0);
-
-    if (appState === STATES.ALARM) {
-      setState(target && stream ? STATES.MONITORING : stream ? STATES.CAMERA : STATES.IDLE);
-      if (showFeedback && currentEventId) {
-        feedbackEventId = currentEventId;
-        setTimeout(() => showModal(els.feedbackModal), 120);
-      }
-    }
-    currentEventId = null;
-  }
-
-  async function ensureAudioContext() {
-    if (!audioContext) {
-      const AudioCtor = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtor) return null;
-      audioContext = new AudioCtor();
-    }
-    if (audioContext.state === 'suspended') {
-      try { await audioContext.resume(); } catch { /* no-op */ }
-    }
-    return audioContext;
-  }
-
-  async function playAlarm() {
-    if (settings.vibrationEnabled && navigator.vibrate) {
-      navigator.vibrate([280, 120, 280, 120, 620, 180, 280]);
-    }
-    if (!settings.soundEnabled) return;
-    await ensureAudioContext();
-    playBeepPattern();
-    clearInterval(alarmRepeatTimer);
-    alarmRepeatTimer = setInterval(playBeepPattern, 1900);
-  }
-
-  function playBeepPattern() {
-    if (!audioContext || !settings.soundEnabled) return;
-    const start = audioContext.currentTime + 0.02;
-    [0, 0.34, 0.68].forEach((offset, index) => {
-      const oscillator = audioContext.createOscillator();
-      const gain = audioContext.createGain();
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(index === 2 ? 980 : 820, start + offset);
-      oscillator.frequency.exponentialRampToValueAtTime(index === 2 ? 680 : 610, start + offset + 0.18);
-      gain.gain.setValueAtTime(0.0001, start + offset);
-      gain.gain.exponentialRampToValueAtTime(0.22, start + offset + 0.018);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.22);
-      oscillator.connect(gain).connect(audioContext.destination);
-      oscillator.start(start + offset);
-      oscillator.stop(start + offset + 0.24);
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloading) return;
+      reloading = true;
+      window.location.reload();
     });
+  } catch (error) {
+    console.warn('Service worker registration failed:', error);
   }
+}
 
-  function stopAlarmSound() {
-    clearInterval(alarmRepeatTimer);
-    alarmRepeatTimer = null;
+function showUpdateBanner(registration) {
+  if (!els.updateBanner) return;
+  els.updateBanner.classList.remove('hidden');
+  els.reloadBtn?.addEventListener('click', () => {
+    registration.waiting?.postMessage('SKIP_WAITING');
+  }, { once: true });
+}
+
+// ==========================================================================
+// Init
+// ==========================================================================
+function init() {
+  alarmCtl.onWakeStateChange = (state) => {
+    els.wakeText.textContent = { on: '켜짐', off: '풀림', unsupported: '미지원' }[state] || '—';
+  };
+  applySettingsToUi();
+  renderHistory();
+  setPhase(PHASE.IDLE);
+  bindEvents();
+  registerServiceWorker();
+  resizeChart();
+  drawMotionChart();
+  if (!window.isSecureContext && location.hostname !== 'localhost' && location.protocol !== 'file:') {
+    showToast('실제 카메라 사용에는 HTTPS 연결이 필요해요.', 4200);
   }
+}
 
-  function saveHistory() {
-    storage.setItem(HISTORY_KEY, JSON.stringify(history));
-  }
-
-  function renderHistory() {
-    els.historyList.textContent = '';
-    if (!history.length) {
-      const empty = document.createElement('div');
-      empty.className = 'history-empty';
-      empty.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 4v16h16V8l-4-4z"/><path d="M8 13h8M8 17h5M15 4v5h5"/></svg><strong>아직 감지 기록이 없어요</strong><span>입질을 찾으면 시간과 움직임 종류를 남겨드려요.</span>';
-      els.historyList.appendChild(empty);
-      return;
-    }
-
-    history.slice(0, 10).forEach((event) => {
-      const item = document.createElement('article');
-      item.className = 'history-item';
-
-      const icon = document.createElement('div');
-      icon.className = 'history-icon';
-      icon.innerHTML = event.reason.includes('떨림')
-        ? '<svg viewBox="0 0 24 24"><path d="M5 12h2l2-6 3 12 3-9 2 6h2"/></svg>'
-        : '<svg viewBox="0 0 24 24"><path d="M12 3v13m-4-4 4 4 4-4M5 20h14"/></svg>';
-
-      const main = document.createElement('div');
-      main.className = 'history-main';
-      const title = document.createElement('strong');
-      title.textContent = event.reason;
-      const time = document.createElement('span');
-      time.textContent = formatEventTime(event.timestamp);
-      main.append(title, time);
-
-      const side = document.createElement('div');
-      side.className = 'history-side';
-      const score = document.createElement('span');
-      score.className = 'history-score';
-      score.textContent = `강도 ${event.score}`;
-      side.appendChild(score);
-
-      if (event.feedback === true || event.feedback === false) {
-        const label = document.createElement('span');
-        label.className = `feedback-label ${event.feedback ? 'true' : 'false'}`;
-        label.textContent = event.feedback ? '✓ 입질 맞음' : '오탐 표시';
-        side.appendChild(label);
-      } else {
-        const pills = document.createElement('div');
-        pills.className = 'feedback-pills';
-        const yes = document.createElement('button');
-        yes.type = 'button';
-        yes.dataset.feedbackId = event.id;
-        yes.dataset.feedbackValue = 'true';
-        yes.textContent = '입질';
-        const no = document.createElement('button');
-        no.type = 'button';
-        no.dataset.feedbackId = event.id;
-        no.dataset.feedbackValue = 'false';
-        no.textContent = '오탐';
-        pills.append(yes, no);
-        side.appendChild(pills);
-      }
-
-      item.append(icon, main, side);
-      els.historyList.appendChild(item);
-    });
-  }
-
-  function formatEventTime(timestamp) {
-    try {
-      return new Intl.DateTimeFormat('ko-KR', {
-        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'
-      }).format(new Date(timestamp));
-    } catch {
-      return timestamp;
-    }
-  }
-
-  function setFeedback(id, value) {
-    const event = history.find((item) => Number(item.id) === Number(id));
-    if (!event) return;
-    event.feedback = value;
-    adaptiveAdjustment = clamp(adaptiveAdjustment + (value ? -0.018 : 0.055), -0.18, 0.32);
-    storage.setItem(ADAPTIVE_KEY, String(adaptiveAdjustment));
-    saveHistory();
-    renderHistory();
-    showToast(value ? '입질로 기록했어요.' : '오탐으로 기록했어요. 민감도를 조금 낮춰 반영합니다.');
-  }
-
-  async function requestWakeLock() {
-    if (!('wakeLock' in navigator)) {
-      els.wakeText.textContent = '미지원';
-      return;
-    }
-    if (wakeLock || document.visibilityState !== 'visible') return;
-    try {
-      wakeLock = await navigator.wakeLock.request('screen');
-      els.wakeText.textContent = '켜짐';
-      wakeLock.addEventListener('release', () => {
-        wakeLock = null;
-        els.wakeText.textContent = '풀림';
-      }, { once: true });
-    } catch {
-      els.wakeText.textContent = '풀림';
-    }
-  }
-
-  async function releaseWakeLock() {
-    if (!wakeLock) return;
-    try { await wakeLock.release(); } catch { /* no-op */ }
-    wakeLock = null;
-    els.wakeText.textContent = '—';
-  }
-
-  function startDemoAnimation() {
-    const token = ++demoLoopToken;
-    const width = els.demoCanvas.width;
-    const height = els.demoCanvas.height;
-
-    const draw = (now) => {
-      if (token !== demoLoopToken || !isDemo) return;
-      const elapsed = now - demoStartTime;
-      const waterY = 322;
-      let biteOffset = 0;
-      if (demoBite) {
-        const t = (now - demoBite.start) / demoBite.duration;
-        if (t >= 1) {
-          demoBite = null;
-        } else if (demoBite.type === 'sink') {
-          if (t < 0.22) biteOffset = smoothStep(t / 0.22) * 58;
-          else if (t < 0.56) biteOffset = 58 + Math.sin(t * 52) * 2;
-          else biteOffset = (1 - smoothStep((t - 0.56) / 0.44)) * 58;
-        } else if (demoBite.type === 'lift') {
-          if (t < 0.28) biteOffset = -smoothStep(t / 0.28) * 36;
-          else if (t < 0.58) biteOffset = -36;
-          else biteOffset = -(1 - smoothStep((t - 0.58) / 0.42)) * 36;
-        } else if (demoBite.type === 'twitch') {
-          biteOffset = Math.sin(t * Math.PI * 16) * 13 * Math.sin(Math.PI * t);
-        }
-      }
-
-      const sky = demoCtx.createLinearGradient(0, 0, 0, waterY);
-      sky.addColorStop(0, '#0b2531');
-      sky.addColorStop(1, '#183d49');
-      demoCtx.fillStyle = sky;
-      demoCtx.fillRect(0, 0, width, waterY);
-
-      const glow = demoCtx.createRadialGradient(710, 90, 5, 710, 90, 240);
-      glow.addColorStop(0, 'rgba(112,211,225,.23)');
-      glow.addColorStop(1, 'rgba(112,211,225,0)');
-      demoCtx.fillStyle = glow;
-      demoCtx.fillRect(0, 0, width, waterY);
-
-      demoCtx.fillStyle = 'rgba(5,19,27,.58)';
-      demoCtx.beginPath();
-      demoCtx.moveTo(0, 260);
-      for (let x = 0; x <= width; x += 70) {
-        const hill = 248 + Math.sin(x * 0.013) * 20 + Math.sin(x * 0.027) * 9;
-        demoCtx.lineTo(x, hill);
-      }
-      demoCtx.lineTo(width, waterY);
-      demoCtx.lineTo(0, waterY);
-      demoCtx.fill();
-
-      const water = demoCtx.createLinearGradient(0, waterY, 0, height);
-      water.addColorStop(0, '#0d4656');
-      water.addColorStop(1, '#072a38');
-      demoCtx.fillStyle = water;
-      demoCtx.fillRect(0, waterY, width, height - waterY);
-
-      for (let row = 0; row < 13; row += 1) {
-        const y = waterY + 8 + row * 18;
-        demoCtx.strokeStyle = `rgba(127, 220, 225, ${0.12 - row * 0.005})`;
-        demoCtx.lineWidth = row % 3 === 0 ? 2 : 1;
-        demoCtx.beginPath();
-        for (let x = -20; x <= width + 20; x += 8) {
-          const wave = Math.sin(x * 0.024 + elapsed * 0.0016 + row * 0.85) * (2.2 + row * 0.08);
-          if (x === -20) demoCtx.moveTo(x, y + wave);
-          else demoCtx.lineTo(x, y + wave);
-        }
-        demoCtx.stroke();
-      }
-
-      const floatX = width * 0.53 + Math.sin(elapsed * 0.00035) * 1.7;
-      const idle = Math.sin(elapsed * 0.0042) * 2.1 + Math.sin(elapsed * 0.009) * 0.7;
-      const floatY = waterY - 27 + idle + biteOffset;
-
-      demoCtx.save();
-      demoCtx.translate(floatX, floatY);
-      demoCtx.rotate(Math.sin(elapsed * 0.0026) * 0.012);
-      demoCtx.shadowColor = 'rgba(255,76,55,.72)';
-      demoCtx.shadowBlur = 15;
-      demoCtx.fillStyle = '#ff543d';
-      demoCtx.fillRect(-4, -76, 8, 39);
-      demoCtx.shadowBlur = 0;
-      demoCtx.fillStyle = '#ff6a45';
-      roundRectFill(demoCtx, -11, -41, 22, 30, 9);
-      demoCtx.fillStyle = '#edf9f6';
-      demoCtx.fillRect(-11, -24, 22, 22);
-      demoCtx.fillStyle = '#203b45';
-      roundRectFill(demoCtx, -11, -4, 22, 33, 9);
-      demoCtx.fillStyle = '#152e38';
-      demoCtx.fillRect(-2, 28, 4, 24);
-      demoCtx.restore();
-
-      demoCtx.fillStyle = 'rgba(10,66,80,.44)';
-      demoCtx.fillRect(0, waterY, width, height - waterY);
-      demoCtx.strokeStyle = 'rgba(179,238,238,.38)';
-      demoCtx.lineWidth = 2;
-      demoCtx.beginPath();
-      for (let x = 0; x <= width; x += 7) {
-        const wave = Math.sin(x * 0.032 + elapsed * 0.0022) * 3;
-        if (x === 0) demoCtx.moveTo(x, waterY + wave);
-        else demoCtx.lineTo(x, waterY + wave);
-      }
-      demoCtx.stroke();
-
-      demoCtx.fillStyle = 'rgba(236,250,250,.78)';
-      demoCtx.font = '600 18px system-ui, sans-serif';
-      demoCtx.fillText('빨간 찌 끝을 터치해보세요', 34, 45);
-      demoCtx.fillStyle = 'rgba(236,250,250,.48)';
-      demoCtx.font = '500 13px system-ui, sans-serif';
-      demoCtx.fillText('보정이 끝나면 아래 입질 버튼으로 알람을 시험할 수 있어요.', 34, 70);
-
-      requestAnimationFrame(draw);
-    };
-    requestAnimationFrame(draw);
-  }
-
-  function roundRectFill(ctx, x, y, width, height, radius) {
-    ctx.beginPath();
-    roundedRectPath(ctx, x, y, width, height, radius);
-    ctx.fill();
-  }
-
-  function triggerDemoBite(type) {
-    if (!isDemo) return;
-    const durations = { sink: 2100, lift: 1900, twitch: 1800 };
-    demoBite = { type, start: performance.now(), duration: durations[type] || 1900 };
-    if (appState !== STATES.MONITORING) {
-      showToast('움직임은 만들었지만, 알람을 보려면 감시 시작을 눌러주세요.');
-    }
-  }
-
-  function bindEvents() {
-    els.startCameraBtn.addEventListener('click', startCamera);
-    els.startDemoBtn.addEventListener('click', startDemo);
-    els.stopCameraBtn.addEventListener('click', () => stopCamera());
-    els.flipCameraBtn.addEventListener('click', flipCamera);
-    els.resetTargetBtn.addEventListener('click', () => resetTarget(true));
-    els.overlay.addEventListener('pointerdown', handleTargetPointer);
-    els.monitorBtn.addEventListener('click', () => {
-      if (appState === STATES.READY) startMonitoring();
-      else if (appState === STATES.MONITORING || appState === STATES.ALARM) stopMonitoring();
-    });
-    els.stopAlarmBtn.addEventListener('click', () => stopAlarm(true));
-
-    els.sensitivity.addEventListener('input', () => {
-      settings.sensitivity = Number(els.sensitivity.value);
-      updateSettingLabels();
-      saveSettings();
-    });
-    els.detectMode.addEventListener('change', () => {
-      settings.detectMode = els.detectMode.value;
-      saveSettings();
-    });
-    els.nightMode.addEventListener('change', () => {
-      settings.nightMode = els.nightMode.checked;
-      saveSettings();
-      showToast(settings.nightMode ? '야간 LED 모드를 켰어요.' : '일반 색상 모드로 바꿨어요.');
-    });
-    els.soundEnabled.addEventListener('change', () => {
-      settings.soundEnabled = els.soundEnabled.checked;
-      saveSettings();
-      if (!settings.soundEnabled) stopAlarmSound();
-      else ensureAudioContext();
-    });
-    els.vibrationEnabled.addEventListener('change', () => {
-      settings.vibrationEnabled = els.vibrationEnabled.checked;
-      saveSettings();
-    });
-    els.waveCorrection.addEventListener('change', () => {
-      settings.waveCorrection = els.waveCorrection.checked;
-      saveSettings();
-    });
-    els.colorTolerance.addEventListener('input', () => {
-      settings.colorTolerance = Number(els.colorTolerance.value);
-      updateSettingLabels();
-      saveSettings();
-    });
-
-    els.demoControls.addEventListener('click', (event) => {
-      const button = event.target.closest('[data-demo-bite]');
-      if (button) triggerDemoBite(button.dataset.demoBite);
-    });
-
-    els.historyList.addEventListener('click', (event) => {
-      const button = event.target.closest('[data-feedback-id]');
-      if (!button) return;
-      setFeedback(button.dataset.feedbackId, button.dataset.feedbackValue === 'true');
-    });
-    els.clearHistoryBtn.addEventListener('click', () => {
-      if (!history.length) return;
-      if (window.confirm('입질 기록을 모두 지울까요?')) {
-        history = [];
-        saveHistory();
-        renderHistory();
-        showToast('기록을 모두 지웠어요.');
-      }
-    });
-
-    els.helpBtn.addEventListener('click', () => showModal(els.helpModal));
-    els.closeHelpBtn.addEventListener('click', () => hideModal(els.helpModal));
-    els.helpOkayBtn.addEventListener('click', () => hideModal(els.helpModal));
-    els.helpModal.addEventListener('click', (event) => {
-      if (event.target === els.helpModal) hideModal(els.helpModal);
-    });
-
-    els.feedbackTrueBtn.addEventListener('click', () => {
-      if (feedbackEventId) setFeedback(feedbackEventId, true);
-      feedbackEventId = null;
-      hideModal(els.feedbackModal);
-    });
-    els.feedbackFalseBtn.addEventListener('click', () => {
-      if (feedbackEventId) setFeedback(feedbackEventId, false);
-      feedbackEventId = null;
-      hideModal(els.feedbackModal);
-    });
-    els.feedbackSkipBtn.addEventListener('click', () => {
-      feedbackEventId = null;
-      hideModal(els.feedbackModal);
-    });
-
-    window.addEventListener('beforeinstallprompt', (event) => {
-      event.preventDefault();
-      deferredInstallPrompt = event;
-      els.installBtn.classList.remove('hidden');
-    });
-    els.installBtn.addEventListener('click', async () => {
-      if (!deferredInstallPrompt) {
-        showToast('브라우저 메뉴에서 “홈 화면에 추가”를 선택해주세요.');
-        return;
-      }
-      deferredInstallPrompt.prompt();
-      await deferredInstallPrompt.userChoice;
-      deferredInstallPrompt = null;
-      els.installBtn.classList.add('hidden');
-    });
-    window.addEventListener('appinstalled', () => {
-      deferredInstallPrompt = null;
-      els.installBtn.classList.add('hidden');
-      showToast('찌봄을 홈 화면에 설치했어요.');
-    });
-
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && stream) requestWakeLock();
-    });
-    window.addEventListener('resize', () => {
-      resizeOverlay();
-      resizeChart();
-      drawOverlay();
-    });
-    window.addEventListener('orientationchange', () => setTimeout(() => {
-      resizeOverlay();
-      resizeChart();
-    }, 250));
-    window.addEventListener('beforeunload', () => {
-      if (stream) stream.getTracks().forEach((track) => track.stop());
-    });
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') {
-        hideModal(els.helpModal);
-        hideModal(els.feedbackModal);
-        if (appState === STATES.ALARM) stopAlarm(true);
-      }
-    });
-  }
-
-  function registerServiceWorker() {
-    if ('serviceWorker' in navigator && (window.isSecureContext || location.hostname === 'localhost')) {
-      navigator.serviceWorker.register('./sw.js').catch((error) => console.warn('Service worker registration failed:', error));
-    }
-  }
-
-  function init() {
-    applySettingsToUi();
-    renderHistory();
-    setState(STATES.IDLE);
-    bindEvents();
-    registerServiceWorker();
-    resizeChart();
-    drawMotionChart();
-
-    if (!window.isSecureContext && location.hostname !== 'localhost' && location.protocol !== 'file:') {
-      showToast('실제 카메라 사용에는 HTTPS 연결이 필요해요.', 4200);
-    }
-  }
-
-  init();
-})();
+init();

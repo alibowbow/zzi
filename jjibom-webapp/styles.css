@@ -604,6 +604,37 @@ footer strong { color: var(--muted); }
   .demo-controls span { flex-basis: 100%; }
 }
 
+/* Camera extras: zoom + device selector (shown only when supported) */
+.camera-extra { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.camera-extra:empty { display: none; }
+.camera-extra-item { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 150px; padding: 8px 12px; border-radius: 12px; background: rgba(255,255,255,.03); border: 1px solid var(--line); }
+.camera-extra-item span { color: var(--muted); font-size: 10px; font-weight: 700; flex: 0 0 auto; }
+.camera-extra-item input[type="range"] { flex: 1; }
+.camera-select { width: auto; min-width: 150px; height: 39px; flex: 1; }
+
+/* Demo scenario controls (multiple grouped labels) */
+.demo-controls span:not(:first-child) { margin-left: 8px; }
+.demo-controls button.active { border-color: rgba(98,201,255,.6); background: rgba(98,201,255,.16); color: #fff; }
+
+/* Developer diagnostics panel (closed by default) */
+.diag-panel { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+.diag-panel summary { color: var(--muted); font-size: 10px; cursor: pointer; padding: 4px 0; letter-spacing: .04em; }
+.diag-panel[open] summary { color: var(--mint); }
+.diag-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; }
+.diag-grid > div { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,.025); border: 1px solid rgba(255,255,255,.05); }
+.diag-grid span { color: var(--muted); font-size: 9px; }
+.diag-grid strong { font-size: 11px; font-variant-numeric: tabular-nums; }
+.diag-export { margin-top: 10px; color: var(--cyan); }
+
+/* "New version available" banner */
+.update-banner { position: fixed; left: 50%; bottom: calc(22px + var(--safe-bottom)); z-index: 210; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: 13px; background: var(--panel-2); border: 1px solid var(--line-strong); box-shadow: 0 15px 40px rgba(0,0,0,.4); font-size: 11px; }
+.update-banner button { border: 0; border-radius: 9px; padding: 7px 12px; font-size: 11px; font-weight: 750; color: #04231d; background: var(--mint); cursor: pointer; }
+
+@media (max-width: 620px) {
+  .diag-grid { grid-template-columns: 1fr; }
+  .camera-extra-item, .camera-select { min-width: 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
 }

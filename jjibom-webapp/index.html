@@ -137,11 +137,28 @@
           </div>
         </div>
 
+        <div class="camera-extra">
+          <label class="camera-extra-item hidden" id="zoomControl">
+            <span>줌</span>
+            <input id="zoomRange" type="range" min="1" max="4" step="0.1" value="1" aria-label="카메라 줌" />
+          </label>
+          <select id="cameraSelect" class="camera-select hidden" aria-label="카메라 선택"></select>
+        </div>
+
         <div class="demo-controls hidden" id="demoControls">
-          <span>데모 입질</span>
-          <button type="button" data-demo-bite="sink">푹 잠김</button>
-          <button type="button" data-demo-bite="lift">쑥 올라옴</button>
-          <button type="button" data-demo-bite="twitch">토독 떨림</button>
+          <span>환경</span>
+          <button type="button" data-demo-scene="calm">잔잔</button>
+          <button type="button" data-demo-scene="waves">강한 파도</button>
+          <button type="button" data-demo-scene="shake">카메라 흔들림</button>
+          <button type="button" data-demo-scene="decoy">비슷한 색</button>
+          <button type="button" data-demo-scene="occlude">찌 가림</button>
+          <span>입질</span>
+          <button type="button" data-demo-scene="sink">푹 잠김</button>
+          <button type="button" data-demo-scene="lift">쑥 올라옴</button>
+          <button type="button" data-demo-scene="twitch">토독 떨림</button>
+          <span>추적</span>
+          <button type="button" data-demo-scene="hide">완전 실패</button>
+          <button type="button" data-demo-scene="reacquire">재획득</button>
         </div>
       </section>
 
@@ -169,6 +186,23 @@
             <div class="chart-label top">위</div>
             <div class="chart-label bottom">아래</div>
           </div>
+
+          <details class="diag-panel" id="diagPanel">
+            <summary>개발자 진단 패널</summary>
+            <div class="diag-grid">
+              <div><span>상태</span><strong id="diagState">—</strong></div>
+              <div><span>추적 신뢰도</span><strong id="diagConfidence">—</strong></div>
+              <div><span>찌 좌표 x,y</span><strong id="diagPos">—</strong></div>
+              <div><span>보정 dy(정규화)</span><strong id="diagCorrectedDy">—</strong></div>
+              <div><span>배경 dy</span><strong id="diagBgDy">—</strong></div>
+              <div><span>기준 찌 높이</span><strong id="diagFloatHeight">—</strong></div>
+              <div><span>현재 찌 높이</span><strong id="diagCurHeight">—</strong></div>
+              <div><span>현재 면적비</span><strong id="diagAreaRatio">—</strong></div>
+              <div><span>입질 점수</span><strong id="diagBiteScore">—</strong></div>
+              <div><span>분석 FPS</span><strong id="diagFps">—</strong></div>
+            </div>
+            <button id="diagExportBtn" type="button" class="text-btn diag-export">최근 이벤트 JSON 내보내기</button>
+          </details>
         </article>
 
         <article class="settings-card">
@@ -293,6 +327,12 @@
   </div>
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-  <script src="app.js" defer></script>
+
+  <div id="updateBanner" class="update-banner hidden" role="status">
+    <span>새 버전이 준비됐어요.</span>
+    <button id="reloadBtn" type="button">새로고침</button>
+  </div>
+
+  <script type="module" src="app.js"></script>
 </body>
 </html>
