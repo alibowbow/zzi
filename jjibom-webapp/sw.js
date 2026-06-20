@@ -4,7 +4,7 @@
 
 // Bump CACHE_VERSION on every deploy so the old app shell is dropped on
 // activate. The "v" number is the single source of truth for cache busting.
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const CACHE_PREFIX = 'jjibom-';
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 
@@ -23,6 +23,7 @@ const APP_SHELL = [
   './src/motionCompensation.js',
   './src/biteDetector.js',
   './src/trackingState.js',
+  './src/floatTracker.js',
   './src/diagnostics.js',
   './src/swCache.js',
   './src/camera.js',

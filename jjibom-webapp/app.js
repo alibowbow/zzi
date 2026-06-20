@@ -1,30 +1,27 @@
 // app.js — orchestration layer. Owns the DOM, the analysis loop and the demo,
-// and wires together the (testable, DOM-free) modules in ./src. The heavy
-// computation lives in those modules; this file connects them to the page.
+// and drives one or more FloatUnit trackers (multi-select). Heavy computation
+// lives in the testable modules under ./src.
 
-import { clamp, lerp, median, mad, ema } from './src/stats.js';
-import { rgbToHsv, representativeColor, colorName, rgbToHex, luma } from './src/color.js';
+import { clamp, lerp } from './src/stats.js';
+import { representativeColor, colorName, rgbToHex, luma } from './src/color.js';
 import { mediaDisplayRect, displayToMedia, mediaToDisplay } from './src/geometry.js';
-import { BlobTracker, computeConfidence } from './src/blobTracker.js';
 import { estimateBackgroundMotion } from './src/motionCompensation.js';
-import { analyzeBite, AlarmGate } from './src/biteDetector.js';
-import { TrackingMachine, TrackState, alarmGateOpen } from './src/trackingState.js';
-import { Diagnostics } from './src/diagnostics.js';
+import { TrackState } from './src/trackingState.js';
+import { FloatUnit } from './src/floatTracker.js';
 import { CameraController } from './src/camera.js';
 import { AlarmController } from './src/alarm.js';
 import { storage, loadJson, saveJson, downloadJson } from './src/storage.js';
 import { DemoScene } from './src/demo.js';
-import {
-  ANALYSIS_MAX, PROCESS_INTERVAL_MS, CALIBRATION_FRAMES,
-  ROI, BLOB, SHAKE, BITE, CALIB, CONFIDENCE, APP_VERSION
-} from './src/config.js';
+import { ANALYSIS_MAX, PROCESS_INTERVAL_MS, CALIBRATION_FRAMES, SHAKE } from './src/config.js';
 
 const HISTORY_KEY = 'jjibom-history-v1';
 const SETTINGS_KEY = 'jjibom-settings-v1';
 const ADAPTIVE_KEY = 'jjibom-adaptive-v1';
 
-// App-level UI phases (chrome). The fine-grained tracking states (TRACKING /
-// LOST / RECOVERING …) live in the TrackingMachine and run during MONITORING.
+const MAX_FLOATS = 4;
+const FLOAT_PALETTE = ['#42edc4', '#62c9ff', '#ffdb75', '#ff9bd2'];
+
+// App-level UI phases (chrome). Fine-grained tracking states live per-float.
 const PHASE = Object.freeze({
   IDLE: 'idle', CAMERA: 'camera', CALIBRATING: 'calibrating',
   READY: 'ready', MONITORING: 'monitoring', ALARM: 'alarm'
@@ -41,10 +38,9 @@ const els = {};
   'alarmReason', 'alarmScore', 'stopAlarmBtn', 'motionGauge', 'motionScore',
   'verticalMove', 'confidenceMetric', 'areaMetric', 'motionChart', 'sensitivity',
   'sensitivityOutput', 'detectMode', 'nightMode', 'soundEnabled', 'vibrationEnabled',
-  'waveCorrection', 'colorTolerance', 'toleranceOutput', 'historyList', 'clearHistoryBtn',
-  'installBtn', 'helpBtn', 'helpModal', 'closeHelpBtn', 'helpOkayBtn', 'feedbackModal',
+  'waveCorrection', 'multiSelect', 'colorTolerance', 'toleranceOutput', 'historyList',
+  'clearHistoryBtn', 'helpBtn', 'helpModal', 'closeHelpBtn', 'helpOkayBtn', 'feedbackModal',
   'feedbackTrueBtn', 'feedbackFalseBtn', 'feedbackSkipBtn', 'toast',
-  // new optional elements (guarded with ?. everywhere)
   'cameraSelect', 'zoomControl', 'zoomRange', 'diagPanel', 'diagState', 'diagConfidence',
   'diagPos', 'diagCorrectedDy', 'diagBgDy', 'diagFloatHeight', 'diagCurHeight',
   'diagAreaRatio', 'diagBiteScore', 'diagFps', 'diagExportBtn', 'updateBanner', 'reloadBtn'
@@ -54,14 +50,9 @@ const analysisCtx = els.analysisCanvas.getContext('2d', { willReadFrequently: tr
 const overlayCtx = els.overlay.getContext('2d');
 const chartCtx = els.motionChart.getContext('2d');
 
-// --- Controllers / modules ------------------------------------------------
 const cameraCtl = new CameraController(els.camera);
 const alarmCtl = new AlarmController();
 const demo = new DemoScene();
-const blobTracker = new BlobTracker();
-const alarmGate = new AlarmGate();
-const machine = new TrackingMachine();
-const diagnostics = new Diagnostics();
 
 // --- Mutable app state ----------------------------------------------------
 let phase = PHASE.IDLE;
@@ -71,38 +62,31 @@ let frameLoopToken = 0;
 let lastProcessAt = 0;
 let lastFrameAt = 0;
 let fpsEma = 0;
-let target = null;
-let calibrationSamples = [];
+let floats = [];               // FloatUnit[] — one per selected float
+let calibFrames = 0;
 let history = loadJson(HISTORY_KEY, []);
 let adaptiveAdjustment = Number(storage.getItem(ADAPTIVE_KEY) || 0);
 let currentEventId = null;
 let feedbackEventId = null;
 let lastExportableEvent = null;
-let deferredInstallPrompt = null;
 let toastTimer = null;
 let alarmTimer = null;
 
 // Per-frame analysis scratch (reused; no per-frame big allocations).
-let frameImage = null;       // ImageData reused via getImageData
-let prevLuma = null;         // Float32Array of previous processed frame luma
+let frameImage = null;
+let prevLuma = null;
 let currLuma = null;
 let lumaSize = 0;
-let bgOffsetX = 0;           // leaky-integrated background displacement (px)
+let bgOffsetX = 0;             // shared, leaky-integrated background displacement
 let bgOffsetY = 0;
-let shakingUntil = 0;
-
-// Monitoring timers / trackers
-let lastFoundAt = 0;
-let lowConfSince = 0;
-let stableFrames = 0;
-let lastKnownX = 0;
-let lastKnownY = 0;
-let graph = [];
 
 const settings = Object.assign({
   sensitivity: 6, detectMode: 'balanced', nightMode: false,
-  soundEnabled: true, vibrationEnabled: true, waveCorrection: true, colorTolerance: 28
+  soundEnabled: true, vibrationEnabled: true, waveCorrection: true,
+  multiSelect: false, colorTolerance: 28
 }, loadJson(SETTINGS_KEY, {}));
+
+const primaryFloat = () => floats[0] || null;
 
 // ==========================================================================
 // Settings + UI plumbing
@@ -116,6 +100,7 @@ function applySettingsToUi() {
   els.soundEnabled.checked = settings.soundEnabled;
   els.vibrationEnabled.checked = settings.vibrationEnabled;
   els.waveCorrection.checked = settings.waveCorrection;
+  if (els.multiSelect) els.multiSelect.checked = settings.multiSelect;
   els.colorTolerance.value = settings.colorTolerance;
   updateSettingLabels();
 }
@@ -147,9 +132,10 @@ function setPhase(next) {
   els.cameraHud.classList.toggle('hidden', next === PHASE.IDLE);
   els.stopCameraBtn.classList.toggle('hidden', next === PHASE.IDLE);
   els.flipCameraBtn.classList.toggle('hidden', next === PHASE.IDLE || isDemo);
-  els.resetTargetBtn.classList.toggle('hidden', !target || next === PHASE.IDLE || next === PHASE.ALARM);
+  els.resetTargetBtn.classList.toggle('hidden', !floats.length || next === PHASE.IDLE || next === PHASE.ALARM);
   els.demoControls?.classList.toggle('hidden', !isDemo || next === PHASE.IDLE);
   els.alarmLayer.classList.toggle('hidden', next !== PHASE.ALARM);
+  if (els.tapGuide && next === PHASE.CAMERA) updateTapGuide();
 
   const canMonitor = next === PHASE.READY || next === PHASE.MONITORING || next === PHASE.ALARM;
   els.monitorBtn.disabled = !canMonitor;
@@ -157,6 +143,14 @@ function setPhase(next) {
   if (next === PHASE.MONITORING) els.monitorBtn.innerHTML = '<span class="record-dot"></span>감시 멈춤';
   else if (next === PHASE.ALARM) els.monitorBtn.innerHTML = '<span class="record-dot"></span>알람 멈춤';
   else els.monitorBtn.innerHTML = '<span class="record-dot"></span>감시 시작';
+}
+
+function updateTapGuide() {
+  const strong = els.tapGuide.querySelector('strong');
+  if (!strong) return;
+  if (settings.multiSelect && floats.length) strong.textContent = `찌 ${floats.length}개 선택됨 · 더 터치하거나 감시 준비`;
+  else if (settings.multiSelect) strong.textContent = '여러 찌를 터치할 수 있어요';
+  else strong.textContent = '화면의 찌 끝을 터치하세요';
 }
 
 function showToast(message, duration = 2500) {
@@ -180,14 +174,12 @@ function hideModal(modal) {
 async function startCamera() {
   await stopEverything(true);
   await alarmCtl.ensureAudio();
-
   if (!navigator.mediaDevices?.getUserMedia) {
     showToast(window.isSecureContext
       ? '이 브라우저는 카메라 기능을 지원하지 않아요.'
       : '카메라는 HTTPS 주소 또는 localhost에서만 사용할 수 있어요.', 4500);
     return;
   }
-
   els.startCameraBtn.disabled = true;
   els.startCameraBtn.textContent = '카메라 여는 중…';
   try {
@@ -266,7 +258,6 @@ async function flipCamera() {
 }
 
 async function refreshCameraControls() {
-  // Device picker (only when more than one rear camera is available).
   if (els.cameraSelect) {
     const inputs = await cameraCtl.listVideoInputs();
     if (inputs.length > 1 && !isDemo) {
@@ -283,7 +274,6 @@ async function refreshCameraControls() {
       els.cameraSelect.classList.add('hidden');
     }
   }
-  // Zoom slider (only when the track exposes a zoom capability).
   if (els.zoomControl && els.zoomRange) {
     const zoom = cameraCtl.getZoomCapability();
     if (zoom && !isDemo) {
@@ -319,44 +309,37 @@ function configureCanvases() {
 // Coordinate helpers (object-fit aware)
 // ==========================================================================
 function stageRect() { return els.cameraStage.getBoundingClientRect(); }
-
 function videoRect() {
   const stage = stageRect();
-  // CSS uses object-fit: contain for #camera.
   return mediaDisplayRect(stage.width, stage.height, els.camera.videoWidth, els.camera.videoHeight, 'contain');
 }
 
 // ==========================================================================
-// Frame loop
+// Frame loop — plain requestAnimationFrame for reliability across real cameras
+// AND the canvas-captureStream demo (rVFC can stall on canvas streams).
 // ==========================================================================
 function startFrameLoop() {
   const token = ++frameLoopToken;
   lastProcessAt = 0;
   lastFrameAt = 0;
   fpsEma = 0;
-  const useVfc = typeof els.camera.requestVideoFrameCallback === 'function';
   const step = (now) => {
     if (token !== frameLoopToken || !cameraCtl.isActive) return;
     if (!lastProcessAt || now - lastProcessAt >= PROCESS_INTERVAL_MS) {
       try { processFrame(now); } catch (error) { console.error('frame error', error); }
       lastProcessAt = now;
     }
-    if (useVfc) els.camera.requestVideoFrameCallback(step);
-    else requestAnimationFrame(step);
+    requestAnimationFrame(step);
   };
-  if (useVfc) els.camera.requestVideoFrameCallback(step);
-  else requestAnimationFrame(step);
+  requestAnimationFrame(step);
 }
 
 function processFrame(now) {
   const aw = els.analysisCanvas.width;
   const ah = els.analysisCanvas.height;
   if (!els.camera.videoWidth || !aw) return;
-  try {
-    analysisCtx.drawImage(els.camera, 0, 0, aw, ah);
-  } catch { return; }
+  try { analysisCtx.drawImage(els.camera, 0, 0, aw, ah); } catch { return; }
 
-  // FPS estimate.
   if (lastFrameAt) {
     const instantFps = 1000 / Math.max(1, now - lastFrameAt);
     fpsEma = fpsEma ? lerp(fpsEma, instantFps, 0.12) : instantFps;
@@ -364,22 +347,29 @@ function processFrame(now) {
   }
   lastFrameAt = now;
 
-  // Single getImageData for the whole frame; luma + blob mask both read from it.
   frameImage = analysisCtx.getImageData(0, 0, aw, ah);
   fillLuma(frameImage.data, aw, ah);
 
-  if (target) {
-    const result = trackFrame(aw, ah, now);
-    if (phase === PHASE.CALIBRATING) updateCalibration(result, now);
-    else if (phase === PHASE.MONITORING) updateMonitoring(result, now);
-    else updateIdleMetrics(result);
+  if (floats.length) {
+    // Whole-frame background (camera/mount) motion — computed once, shared.
+    const background = estimateBackgroundMotion(prevLuma, currLuma, aw, ah, null, SHAKE);
+    if (background.confidence >= SHAKE.MIN_CONFIDENCE) {
+      bgOffsetX = bgOffsetX * 0.88 + background.dx;
+      bgOffsetY = bgOffsetY * 0.88 + background.dy;
+    } else {
+      bgOffsetX *= 0.85;
+      bgOffsetY *= 0.85;
+    }
+    floats.forEach((f) => f.track(frameImage, aw, ah, settings));
+
+    if (phase === PHASE.CALIBRATING) handleCalibrationFrame(background);
+    else if (phase === PHASE.MONITORING) handleMonitoringFrame(now, background);
+    else updateIdleMetrics();
   }
 
-  // Roll luma buffers for the next frame's background motion estimate.
   const swap = prevLuma;
   prevLuma = currLuma;
   currLuma = swap || new Float32Array(lumaSize);
-
   drawOverlay();
 }
 
@@ -390,101 +380,8 @@ function fillLuma(data, aw, ah) {
   }
 }
 
-// Run blob tracking + motion estimation for one frame. Returns a rich result.
-function trackFrame(aw, ah, now) {
-  const lost = target.lostFrames || 0;
-  const global = lost >= ROI.GLOBAL_AFTER_LOST;
-  const floatHeight = target.floatHeight || target.heightEst || 12;
-  const radius = global
-    ? Math.max(aw, ah)
-    : Math.max(clamp(ROI.BASE_RADIUS_PX + lost * ROI.GROW_PER_LOST_PX, ROI.BASE_RADIUS_PX, ROI.MAX_RADIUS_PX), floatHeight * 2.2);
-  const rx = global ? 0 : clamp(Math.floor(target.x - radius), 0, aw - 1);
-  const ry = global ? 0 : clamp(Math.floor(target.y - radius), 0, ah - 1);
-  const rw = global ? aw : clamp(Math.ceil(target.x + radius), 1, aw) - rx;
-  const rh = global ? ah : clamp(Math.ceil(target.y + radius), 1, ah) - ry;
-  const roi = { x: rx, y: ry, w: rw, h: rh };
-
-  const options = {
-    tolerance: Number(settings.colorTolerance),
-    nightMode: settings.nightMode,
-    minArea: BLOB.MIN_AREA_PX,
-    connectivity: BLOB.CONNECTIVITY,
-    maxBlobs: BLOB.MAX_BLOBS
-  };
-  const ctx = {
-    hasPrediction: !global,
-    predictX: target.x - rx,
-    predictY: target.y - ry,
-    initialX: target.initialX - rx,
-    initialY: target.initialY - ry,
-    floatHeight,
-    floatArea: target.floatArea || 0
-  };
-
-  const found = blobTracker.analyze(frameImage.data, aw, roi, target, options, ctx);
-  const best = found.best;
-
-  // Background (camera/mount) motion for this frame. The exclude rect uses
-  // width/height keys (the ROI uses w/h), so convert.
-  const exclude = { x: roi.x, y: roi.y, width: roi.w, height: roi.h };
-  const background = estimateBackgroundMotion(prevLuma, currLuma, aw, ah, exclude, SHAKE);
-  const bgMag = Math.hypot(background.dx, background.dy);
-  const bgMagNorm = bgMag / floatHeight;
-  const shaking = background.confidence >= SHAKE.MIN_CONFIDENCE && bgMagNorm >= SHAKE.ALARM_SUPPRESS_NORM;
-  if (shaking) shakingUntil = now + SHAKE.SUPPRESS_MS;
-
-  // Leaky-integrate background displacement so we can subtract slow camera drift
-  // / jitter from the float position without unbounded accumulation.
-  if (background.confidence >= SHAKE.MIN_CONFIDENCE) {
-    bgOffsetX = bgOffsetX * 0.88 + background.dx;
-    bgOffsetY = bgOffsetY * 0.88 + background.dy;
-  } else {
-    bgOffsetX *= 0.85;
-    bgOffsetY *= 0.85;
-  }
-
-  const accepted = best && found.bestScore >= 0.22 && best.qualityMean >= 0.18;
-  if (!accepted) {
-    target.lostFrames = lost + 1;
-    target.confidence *= 0.7;
-    return {
-      found: false, x: target.x, y: target.y, area: 0, height: 0, width: 0,
-      confidence: target.confidence, lostFrames: target.lostFrames,
-      background, bgMagNorm, shaking
-    };
-  }
-
-  const absX = roi.x + best.cx;
-  const absY = roi.y + best.cy;
-  const jumpPx = target.prevX != null ? Math.hypot(absX - target.prevX, absY - target.prevY) : 0;
-  const areaRatio = target.floatArea ? best.area / target.floatArea : 1;
-  const aspect = best.height / Math.max(1, best.width);
-  const confidence = computeConfidence({
-    colorMean: best.qualityMean, jumpPx, floatHeight,
-    areaRatio, aspect, margin: found.margin
-  });
-  const smoothing = confidence > 0.62 ? 0.55 : confidence > 0.35 ? 0.4 : 0.26;
-
-  target.prevX = target.x;
-  target.prevY = target.y;
-  target.x = lerp(target.x, absX, smoothing);
-  target.y = lerp(target.y, absY, smoothing);
-  target.area = target.area ? lerp(target.area, best.area, 0.36) : best.area;
-  target.height = target.height ? lerp(target.height, best.height, 0.4) : best.height;
-  target.width = best.width;
-  target.heightEst = target.heightEst ? ema(target.heightEst, best.height, 0.1) : best.height;
-  target.confidence = confidence;
-  target.lostFrames = 0;
-
-  return {
-    found: true, x: target.x, y: target.y, area: target.area, height: target.height,
-    width: best.width, confidence, lostFrames: 0,
-    background, bgMagNorm, shaking, rawX: absX, rawY: absY
-  };
-}
-
 // ==========================================================================
-// Target selection
+// Target selection (single or multi)
 // ==========================================================================
 function handleTargetPointer(event) {
   if (!cameraCtl.isActive || phase === PHASE.IDLE || phase === PHASE.ALARM) return;
@@ -498,7 +395,6 @@ function handleTargetPointer(event) {
   const point = displayToMedia(px, py, vr, els.camera.videoWidth, els.camera.videoHeight);
   if (!point.inside) { showToast('영상 안쪽의 찌를 터치해주세요.'); return; }
 
-  // Convert media coords -> analysis-canvas coords.
   const ax = point.x / els.camera.videoWidth * els.analysisCanvas.width;
   const ay = point.y / els.camera.videoHeight * els.analysisCanvas.height;
   selectTarget(ax, ay);
@@ -517,201 +413,128 @@ function selectTarget(x, y) {
     const patch = analysisCtx.getImageData(x0, y0, x1 - x0, y1 - y0);
     const sample = representativeColor(patch.data, (x1 - x0) * (y1 - y0));
     if (!sample) { showToast('색을 읽지 못했어요. 다시 터치해주세요.'); return; }
+    const selection = { x, y, rgb: sample.rgb, hsv: sample.hsv };
 
-    target = {
-      initialX: x, initialY: y, x, y, prevX: null, prevY: null,
-      rgb: sample.rgb, hsv: sample.hsv,
-      area: 0, height: 0, width: 0, heightEst: 0,
-      baselineY: y, floatHeight: 0, floatArea: 0, waveMad: 0.6, bgShakeBaseline: 0,
-      confidence: 1, lostFrames: 0
-    };
-    calibrationSamples = [];
+    if (settings.multiSelect) {
+      // Tapping near an existing float re-points it instead of duplicating.
+      const near = floats.find((f) => Math.hypot(f.x - x, f.y - y) <= Math.max(14, f.floatHeight || 12));
+      if (near) {
+        near.reselect(selection);
+      } else if (floats.length < MAX_FLOATS) {
+        floats.push(new FloatUnit(selection));
+      } else {
+        showToast(`찌는 최대 ${MAX_FLOATS}개까지 선택할 수 있어요.`);
+        return;
+      }
+    } else {
+      floats = [new FloatUnit(selection)];
+    }
+
+    calibFrames = 0;
+    floats.forEach((f) => f.beginCalibration());
     bgOffsetX = 0; bgOffsetY = 0;
-    updateTargetColorUi();
+    updateSelectionUi();
     setPhase(PHASE.CALIBRATING);
-    showToast('찌를 찾았어요. 잠깐만 그대로 두세요.');
+    showToast(settings.multiSelect && floats.length > 1
+      ? `찌 ${floats.length}개 · 잠깐 그대로 두세요.`
+      : '찌를 찾았어요. 잠깐만 그대로 두세요.');
   } catch (error) {
     console.error(error);
     showToast('찌 색을 읽는 중 문제가 생겼어요.');
   }
 }
 
-function updateTargetColorUi() {
-  if (!target) return;
-  els.targetSwatch.style.background = `rgb(${target.rgb.r}, ${target.rgb.g}, ${target.rgb.b})`;
-  els.targetColorText.textContent = `${colorName(target.hsv)} · ${rgbToHex(target.rgb)}`;
+function updateSelectionUi() {
+  const primary = primaryFloat();
+  if (!primary) { els.targetSwatch.style.background = ''; els.targetColorText.textContent = '아직 없음'; return; }
+  els.targetSwatch.style.background = `rgb(${primary.rgb.r}, ${primary.rgb.g}, ${primary.rgb.b})`;
+  els.targetColorText.textContent = floats.length > 1
+    ? `찌 ${floats.length}개 선택됨`
+    : `${colorName(primary.hsv)} · ${rgbToHex(primary.rgb)}`;
 }
 
 // ==========================================================================
-// Calibration (robust: median + MAD, validated before monitoring)
+// Calibration (per-float, validated; multi-float calibrates together)
 // ==========================================================================
-function updateCalibration(result, now) {
-  calibrationSamples.push({
-    found: result.found, y: result.y, area: result.area,
-    height: result.height, confidence: result.confidence, bgMagNorm: result.bgMagNorm
-  });
-  const progress = clamp(calibrationSamples.length / CALIBRATION_FRAMES, 0, 1);
+function handleCalibrationFrame(background) {
+  calibFrames += 1;
+  const bgMag = Math.hypot(background.dx, background.dy);
+  floats.forEach((f) => f.calibrateStep(f.lastResult, bgMag));
+  const progress = clamp(calibFrames / CALIBRATION_FRAMES, 0, 1);
   if (els.calibrationText) els.calibrationText.textContent = `폰을 움직이지 말아주세요 · ${Math.round(progress * 100)}%`;
-  if (calibrationSamples.length < CALIBRATION_FRAMES) return;
+  updateTrackingUi(primaryFloat()?.lastResult);
+  if (calibFrames >= CALIBRATION_FRAMES) finalizeCalibration();
+}
 
-  const found = calibrationSamples.filter((s) => s.found && s.confidence >= 0.2);
-  const foundRatio = found.length / calibrationSamples.length;
-  const meanConf = found.length ? found.reduce((a, s) => a + s.confidence, 0) / found.length : 0;
-  const ys = found.map((s) => s.y);
-  const heights = found.map((s) => s.height).filter((h) => h > 0);
-  const areas = found.map((s) => s.area).filter((a) => a > 0);
-  const floatHeight = heights.length ? median(heights) : 0;
-  const floatArea = areas.length ? median(areas) : 0;
-  const waveMad = Math.max(0.4, mad(ys));
-  const bgShake = median(calibrationSamples.map((s) => s.bgMagNorm || 0));
+function finalizeCalibration() {
+  const results = floats.map((f) => ({ f, r: f.finishCalibration() }));
+  const ok = results.filter((x) => x.r.ok).map((x) => x.f);
+  const failed = results.filter((x) => !x.r.ok);
 
-  // --- Validate ----------------------------------------------------------
-  const fail = (message) => { showToast(message, 4200); calibrationSamples = []; if (target) setPhase(PHASE.CAMERA); };
-  if (foundRatio < CALIB.MIN_FOUND_RATIO) return fail('찌를 자주 놓치고 있어요. 더 선명한 부분을 다시 선택해주세요.');
-  if (meanConf < CALIB.MIN_MEAN_CONFIDENCE) return fail('찌와 비슷한 색이 주변에 너무 많아요. 더 또렷한 색을 골라보세요.');
-  if (floatHeight < CALIB.MIN_FLOAT_HEIGHT_PX) return fail('찌가 너무 작게 보여요. 줌을 키우거나 카메라를 가까이 해주세요.');
-  if (bgShake > CALIB.MAX_BG_SHAKE_NORM) return fail('카메라가 많이 흔들려요. 거치대에 단단히 고정해주세요.');
-
-  target.baselineY = median(ys);
-  target.floatHeight = floatHeight;
-  target.floatArea = floatArea;
-  target.waveMad = waveMad;
-  target.bgShakeBaseline = bgShake;
+  if (!ok.length) {
+    const reason = failed[0]?.r.reason || '보정에 실패했어요.';
+    showToast(`${reason} 다시 선택해주세요.`, 4200);
+    floats = [];
+    updateSelectionUi();
+    resetMetrics();
+    clearOverlay();
+    setPhase(PHASE.CAMERA);
+    return;
+  }
+  floats = ok;
+  updateSelectionUi();
+  if (failed.length) showToast(`찌 ${failed.length}개는 보정에 실패해 제외했어요.`, 3500);
+  else showToast(floats.length > 1 ? `보정 완료! 찌 ${floats.length}개를 감시할 수 있어요.` : '보정 완료! 이제 감시를 시작할 수 있어요.');
   setPhase(PHASE.READY);
-  showToast('보정 완료! 이제 감시를 시작할 수 있어요.');
 }
 
 // ==========================================================================
-// Monitoring (the heart): normalize, detect, gate, drive the state machine
+// Monitoring
 // ==========================================================================
 function startMonitoring() {
-  if (!target || phase !== PHASE.READY) return;
+  const ready = floats.filter((f) => f.calibrated);
+  if (!ready.length || phase !== PHASE.READY) return;
   alarmCtl.ensureAudio();
-  diagnostics.clear();
-  alarmGate.reset();
-  graph = [];
+  floats = ready;
   const now = performance.now();
-  machine.set(TrackState.TRACKING, now);
-  lastFoundAt = now;
-  lowConfSince = 0;
-  stableFrames = 0;
-  lastKnownX = target.x;
-  lastKnownY = target.y;
+  floats.forEach((f) => f.beginMonitoring(now));
   bgOffsetX = 0; bgOffsetY = 0;
-  target._prevYN = undefined;
-  target.prevTime = undefined;
   setPhase(PHASE.MONITORING);
   alarmCtl.requestWakeLock();
-  showToast('입질 감시를 시작했어요.');
+  showToast(floats.length > 1 ? `찌 ${floats.length}개 감시를 시작했어요.` : '입질 감시를 시작했어요.');
 }
 
 function stopMonitoring() {
   if (phase === PHASE.ALARM) { cancelAlarm(true); return; }
   if (phase !== PHASE.MONITORING) return;
-  machine.set(TrackState.IDLE, performance.now());
+  const now = performance.now();
+  floats.forEach((f) => f.stopMonitoring(now));
   setPhase(PHASE.READY);
   showToast('감시를 잠시 멈췄어요.');
 }
 
-function updateMonitoring(result, now) {
-  const floatHeight = target.floatHeight || 12;
-  const dt = clamp((now - (target.prevTime || now - PROCESS_INTERVAL_MS)) / 1000, 0.03, 0.25);
-  target.prevTime = now;
-
-  // Shake-corrected position relative to the calibrated baseline, normalized to
-  // float-height units. Subtracting the leaky background offset removes camera
-  // jitter; the normalization keeps sensitivity stable across zoom/resolution.
-  const correctedY = (result.found ? result.y : target.y) - bgOffsetY;
-  const yN = (correctedY - target.baselineY) / floatHeight;
-  const prevYN = target._prevYN ?? yN;
-  const correctedDyFrame = yN - prevYN;            // normalized per-frame delta
-  const vN = correctedDyFrame / dt;                // float-heights per second
-  target._prevYN = yN;
-
-  const areaRatio = target.floatArea ? result.area / target.floatArea : 1;
-  const heightRatio = floatHeight ? result.height / floatHeight : 1;
-  const shaking = now < shakingUntil;
-
-  // One unified sample feeds both the bite detector and the diagnostics export.
-  diagnostics.push({
-    t: now, found: result.found,
-    x: target.x / els.analysisCanvas.width,
-    y: target.y / els.analysisCanvas.height,
-    yN, vN, correctedDy: correctedDyFrame,
-    areaRatio, heightRatio,
-    confidence: result.confidence, shaking
+function handleMonitoringFrame(now, background) {
+  let alarm = null;
+  let alarmUnit = null;
+  let message = null;
+  floats.forEach((f) => {
+    const mon = f.monitor(f.lastResult, now, settings, adaptiveAdjustment, background, bgOffsetY);
+    if (mon.changed && mon.message && !message) message = mon.message;
+    if (mon.alarmEvent && !alarm) { alarm = mon.alarmEvent; alarmUnit = f; }
   });
-
-  const sensitivity = (Number(settings.sensitivity) - 1) / 9;
-  const adaptive = clamp(1 + adaptiveAdjustment, 0.78, 1.34);
-  const bite = analyzeBite(diagnostics.samples, {
-    now, windowMs: BITE.WINDOW_MS,
-    waveMadN: (target.waveMad / floatHeight) * adaptive,
-    detectMode: settings.detectMode, sensitivity
-  });
-
-  // Timers used by the state machine.
-  if (result.found) {
-    lastFoundAt = now;
-    lastKnownX = target.x; lastKnownY = target.y;
-    if (result.confidence >= CONFIDENCE.LOW) {
-      stableFrames += 1;
-      if (!lowConfSince) lowConfSince = 0;
-    } else {
-      stableFrames = 0;
-      if (!lowConfSince) lowConfSince = now;
-    }
-    if (result.confidence >= CONFIDENCE.LOW) lowConfSince = 0;
-  } else {
-    stableFrames = 0;
-  }
-  const lostMs = result.found ? 0 : now - lastFoundAt;
-  const lowConfMs = lowConfSince ? now - lowConfSince : 0;
-  const sinkTrajectory = bite.type === 'sink' && bite.features.sinkScore > 0.5;
-  const reacquireDist = Math.hypot(target.x - lastKnownX, target.y - lastKnownY);
-  const reacquireOk = result.found && result.confidence >= CONFIDENCE.LOW;
-
-  const signals = {
-    found: result.found, confidence: result.confidence, shaking,
-    lostMs, lowConfMs, biteScore: bite.score, sinkTrajectory,
-    reacquireOk, stableFrames, alarmEmitted: false
-  };
-
-  // Alarm gate: only feed it when the machine says alarms are allowed.
-  const gateOpen = alarmGateOpen(machine.state, signals);
-  const event = alarmGate.update(bite.score, bite.type, now, gateOpen);
-  signals.alarmEmitted = Boolean(event);
-
-  const transition = machine.update(signals, now);
-  if (transition.changed && transition.message) showToast(transition.message, 2600);
-  reflectTrackingState(machine.state);
-
-  if (event) triggerAlarm(event, now);
-
-  // Slowly fold the *normal* float position into the baseline so gradual wind /
-  // current drift does not look like a sustained bite. Only while calm + found.
-  if (settings.waveCorrection && result.found && result.confidence > 0.4 && bite.score < 0.4 && !shaking) {
-    target.baselineY = lerp(target.baselineY, correctedY, 0.006);
-  }
-
-  // --- UI ---------------------------------------------------------------
-  graph.push(clamp(yN, -1.6, 1.6));
-  if (graph.length > 150) graph.shift();
-  els.motionGauge.style.setProperty('--value', Math.round(bite.score * 100));
-  els.motionScore.textContent = Math.round(bite.score * 100);
-  els.verticalMove.textContent = ((correctedY - target.baselineY)).toFixed(1);
-  updateTrackingUi(result);
-  updateDiagPanel(result, bite, yN);
-  drawMotionChart();
+  if (message) showToast(message, 2600);
+  reflectTrackingState();
+  updateMonitorUi();
+  if (alarm && alarmUnit) triggerAlarm(alarmUnit, alarm, now);
 }
 
-// Surface LOST / RECOVERING to the status pill during monitoring.
-function reflectTrackingState(state) {
+function reflectTrackingState() {
   if (phase !== PHASE.MONITORING) return;
-  if (state === TrackState.LOST) {
+  const states = floats.map((f) => f.machine.state);
+  if (states.includes(TrackState.LOST)) {
     els.statusLabel.textContent = '찌 놓침';
     els.stateText.textContent = '찌를 놓쳤어요. 화면과 조명을 확인해 주세요.';
-  } else if (state === TrackState.RECOVERING) {
+  } else if (states.includes(TrackState.RECOVERING)) {
     els.statusLabel.textContent = '재탐색';
     els.stateText.textContent = '찌를 다시 찾고 있어요…';
   } else {
@@ -720,37 +543,49 @@ function reflectTrackingState(state) {
   }
 }
 
-function updateIdleMetrics(result) {
-  updateTrackingUi(result);
-  if (els.diagPanel) updateDiagPanel(result, { score: 0, type: 'none' }, 0);
+function updateIdleMetrics() {
+  updateTrackingUi(primaryFloat()?.lastResult);
+  updateDiagPanel();
+}
+
+function updateMonitorUi() {
+  const primary = primaryFloat();
+  const maxBite = floats.reduce((m, f) => Math.max(m, f.biteScore), 0);
+  els.motionGauge.style.setProperty('--value', Math.round(maxBite * 100));
+  els.motionScore.textContent = Math.round(maxBite * 100);
+  els.verticalMove.textContent = (primary?.correctedRel ?? 0).toFixed(1);
+  updateTrackingUi(primary?.lastResult);
+  updateDiagPanel();
+  drawMotionChart();
 }
 
 function updateTrackingUi(result) {
-  const confidence = Math.round(clamp(result.confidence * 100, 0, 100));
-  els.confidenceText.textContent = result.found ? `${confidence}%` : '놓침';
+  const r = result || { found: false, confidence: 0, area: 0 };
+  const primary = primaryFloat();
+  const confidence = Math.round(clamp((r.confidence || 0) * 100, 0, 100));
+  els.confidenceText.textContent = r.found ? `${confidence}%` : '놓침';
   els.confidenceMetric.textContent = confidence;
-  const areaBase = target?.floatArea || result.area || 1;
-  const areaPercent = Math.round(clamp(result.area / areaBase * 100, 0, 160));
-  els.areaMetric.textContent = result.found ? areaPercent : 0;
+  const areaBase = primary?.floatArea || r.area || 1;
+  const areaPercent = Math.round(clamp((r.area || 0) / areaBase * 100, 0, 160));
+  els.areaMetric.textContent = r.found ? areaPercent : 0;
 }
 
 // ==========================================================================
-// Diagnostics panel
+// Diagnostics panel (reflects the primary float)
 // ==========================================================================
-function updateDiagPanel(result, bite, yN) {
-  if (!els.diagPanel || els.diagPanel.open === false) {
-    // Still keep the export target fresh, but skip DOM writes when collapsed.
-  }
+function updateDiagPanel() {
   if (!els.diagState) return;
-  els.diagState.textContent = stateLabel(machine.state);
-  els.diagConfidence.textContent = `${Math.round((result.confidence || 0) * 100)}%`;
-  els.diagPos.textContent = `${Math.round(target?.x || 0)}, ${Math.round(target?.y || 0)}`;
-  els.diagCorrectedDy.textContent = yN.toFixed(3);
+  const primary = primaryFloat();
+  const r = primary?.lastResult || { confidence: 0, height: 0, area: 0 };
+  els.diagState.textContent = primary ? stateLabel(primary.machine.state) : '—';
+  els.diagConfidence.textContent = `${Math.round((r.confidence || 0) * 100)}%`;
+  els.diagPos.textContent = primary ? `${Math.round(primary.x)}, ${Math.round(primary.y)}` : '—';
+  els.diagCorrectedDy.textContent = (primary?.yN ?? 0).toFixed(3);
   els.diagBgDy.textContent = `${bgOffsetY.toFixed(2)}px`;
-  els.diagFloatHeight.textContent = `${(target?.floatHeight || 0).toFixed(1)}px`;
-  els.diagCurHeight.textContent = `${(result.height || 0).toFixed(1)}px`;
-  els.diagAreaRatio.textContent = `${Math.round((target?.floatArea ? (result.area / target.floatArea) : 0) * 100)}%`;
-  els.diagBiteScore.textContent = (bite.score || 0).toFixed(2);
+  els.diagFloatHeight.textContent = `${(primary?.floatHeight || 0).toFixed(1)}px`;
+  els.diagCurHeight.textContent = `${(r.height || 0).toFixed(1)}px`;
+  els.diagAreaRatio.textContent = `${Math.round((primary?.floatArea ? (r.area / primary.floatArea) : 0) * 100)}%`;
+  els.diagBiteScore.textContent = (primary?.biteScore || 0).toFixed(2);
   els.diagFps.textContent = `${Math.round(fpsEma)}`;
 }
 
@@ -764,18 +599,20 @@ function stateLabel(state) {
 // ==========================================================================
 // Alarm + history
 // ==========================================================================
-function triggerAlarm(event, now) {
+function triggerAlarm(unit, event, now) {
   if (phase !== PHASE.MONITORING) return;
+  const idx = floats.indexOf(unit);
+  const floatLabel = floats.length > 1 ? `${idx + 1}번 찌` : null;
   const typeLabel = { sink: '찌가 잠겼어요!', lift: '찌가 솟았어요!', twitch: '토독 입질!' }[event.type] || '입질 감지!';
   const reasonLabel = {
-    sink: '찌가 아래로 가라앉았어요.', lift: '찌가 빠르게 올라왔어요.',
-    twitch: '짧고 빠른 떨림이 이어졌어요.'
+    sink: '찌가 아래로 가라앉았어요.', lift: '찌가 빠르게 올라왔어요.', twitch: '짧고 빠른 떨림이 이어졌어요.'
   }[event.type] || '평소 물결보다 큰 움직임이에요.';
   const score = Math.round(clamp(event.score * 100, 0, 100));
 
   const record = {
     id: Date.now(), timestamp: new Date().toISOString(),
-    reason: typeLabel, type: event.type, score, feedback: null
+    reason: floatLabel ? `${floatLabel} ${typeLabel}` : typeLabel,
+    type: event.type, score, feedback: null
   };
   history.unshift(record);
   history = history.slice(0, 30);
@@ -783,18 +620,17 @@ function triggerAlarm(event, now) {
   renderHistory();
   currentEventId = record.id;
 
-  // Snapshot for local JSON export.
-  lastExportableEvent = diagnostics.exportEvent(
+  lastExportableEvent = unit.diag.exportEvent(
     { at: event.at, timestamp: record.timestamp, type: event.type, score: event.score },
-    { floatHeight: target.floatHeight, floatArea: target.floatArea, waveMad: target.waveMad },
+    { floatHeight: unit.floatHeight, floatArea: unit.floatArea, waveMad: unit.waveMad },
     { deviceInfo: navigator.userAgent, analysisFps: Math.round(fpsEma) }
   );
-  lastExportableEvent.eventId = record.id; // lets feedback back-fill userLabel
+  lastExportableEvent.eventId = record.id;
 
-  els.alarmTitle.textContent = typeLabel;
+  els.alarmTitle.textContent = floatLabel ? `${floatLabel} · ${typeLabel}` : typeLabel;
   els.alarmReason.textContent = reasonLabel;
   els.alarmScore.textContent = score;
-  machine.set(TrackState.ALARM, now);
+  unit.machine.set(TrackState.ALARM, now);
   setPhase(PHASE.ALARM);
   alarmCtl.start({ sound: settings.soundEnabled, vibration: settings.vibrationEnabled });
   clearTimeout(alarmTimer);
@@ -806,9 +642,9 @@ function cancelAlarm(showFeedback = true) {
   alarmTimer = null;
   alarmCtl.stop();
   if (phase === PHASE.ALARM) {
-    const resume = target && cameraCtl.isActive;
-    machine.resume(Boolean(target), performance.now());
-    setPhase(resume ? PHASE.MONITORING : cameraCtl.isActive ? PHASE.CAMERA : PHASE.IDLE);
+    const now = performance.now();
+    floats.forEach((f) => f.resumeAfterAlarm(now));
+    setPhase(floats.length && cameraCtl.isActive ? PHASE.MONITORING : cameraCtl.isActive ? PHASE.CAMERA : PHASE.IDLE);
     if (showFeedback && currentEventId) {
       feedbackEventId = currentEventId;
       setTimeout(() => showModal(els.feedbackModal), 120);
@@ -879,7 +715,6 @@ function setFeedback(id, value) {
   const event = history.find((item) => Number(item.id) === Number(id));
   if (!event) return;
   event.feedback = value;
-  // Light, local-only sensitivity nudge from false positives.
   adaptiveAdjustment = clamp(adaptiveAdjustment + (value ? -0.018 : 0.055), -0.18, 0.32);
   storage.setItem(ADAPTIVE_KEY, String(adaptiveAdjustment));
   if (lastExportableEvent && Number(lastExportableEvent.eventId) === Number(id)) {
@@ -891,7 +726,7 @@ function setFeedback(id, value) {
 }
 
 // ==========================================================================
-// Overlay + chart drawing
+// Overlay + chart
 // ==========================================================================
 function resizeOverlay() {
   const rect = stageRect();
@@ -926,59 +761,68 @@ function clearOverlay() {
 function drawOverlay() {
   const rect = stageRect();
   overlayCtx.clearRect(0, 0, rect.width, rect.height);
-  if (!cameraCtl.isActive || !target) return;
+  if (!cameraCtl.isActive || !floats.length) return;
   const vr = videoRect();
   const aw = els.analysisCanvas.width;
   const ah = els.analysisCanvas.height;
-  const p = mediaToDisplay(target.x / aw * els.camera.videoWidth, target.y / ah * els.camera.videoHeight, vr);
-  const confidence = clamp(target.confidence, 0, 1);
-  const isLost = target.lostFrames > 2 || machine.state === TrackState.LOST;
-  const color = isLost ? '#ff5f70' : confidence > 0.45 ? '#42edc4' : '#ffdb75';
-  const radius = 20;
+  const multi = floats.length > 1;
+  const showBaseline = phase === PHASE.READY || phase === PHASE.MONITORING || phase === PHASE.ALARM;
 
-  overlayCtx.save();
-  overlayCtx.strokeStyle = color;
-  overlayCtx.fillStyle = color;
-  overlayCtx.lineWidth = 1.6;
-  overlayCtx.shadowColor = color;
-  overlayCtx.shadowBlur = 9;
-  overlayCtx.beginPath();
-  overlayCtx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-  overlayCtx.stroke();
-  overlayCtx.shadowBlur = 0;
-  overlayCtx.beginPath();
-  overlayCtx.moveTo(p.x - radius - 9, p.y); overlayCtx.lineTo(p.x - radius + 3, p.y);
-  overlayCtx.moveTo(p.x + radius - 3, p.y); overlayCtx.lineTo(p.x + radius + 9, p.y);
-  overlayCtx.moveTo(p.x, p.y - radius - 9); overlayCtx.lineTo(p.x, p.y - radius + 3);
-  overlayCtx.moveTo(p.x, p.y + radius - 3); overlayCtx.lineTo(p.x, p.y + radius + 9);
-  overlayCtx.stroke();
-  overlayCtx.beginPath();
-  overlayCtx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
-  overlayCtx.fill();
+  floats.forEach((unit, index) => {
+    const p = mediaToDisplay(unit.x / aw * els.camera.videoWidth, unit.y / ah * els.camera.videoHeight, vr);
+    const confidence = clamp(unit.confidence, 0, 1);
+    const isLost = unit.lostFrames > 2 || unit.machine.state === TrackState.LOST;
+    const base = FLOAT_PALETTE[index % FLOAT_PALETTE.length];
+    const color = isLost ? '#ff5f70' : confidence > 0.45 ? base : '#ffdb75';
+    const radius = 20;
 
-  if ((phase === PHASE.READY || phase === PHASE.MONITORING || phase === PHASE.ALARM) && target.baselineY) {
-    const baseY = mediaToDisplay(0, target.baselineY / ah * els.camera.videoHeight, vr).y;
-    overlayCtx.setLineDash([5, 5]);
-    overlayCtx.strokeStyle = 'rgba(255,255,255,.35)';
+    overlayCtx.save();
+    overlayCtx.strokeStyle = color;
+    overlayCtx.fillStyle = color;
+    overlayCtx.lineWidth = 1.6;
+    overlayCtx.shadowColor = color;
+    overlayCtx.shadowBlur = 9;
     overlayCtx.beginPath();
-    overlayCtx.moveTo(Math.max(vr.x, p.x - 64), baseY);
-    overlayCtx.lineTo(Math.min(vr.x + vr.width, p.x + 64), baseY);
+    overlayCtx.arc(p.x, p.y, radius, 0, Math.PI * 2);
     overlayCtx.stroke();
-    overlayCtx.setLineDash([]);
-  }
+    overlayCtx.shadowBlur = 0;
+    overlayCtx.beginPath();
+    overlayCtx.moveTo(p.x - radius - 9, p.y); overlayCtx.lineTo(p.x - radius + 3, p.y);
+    overlayCtx.moveTo(p.x + radius - 3, p.y); overlayCtx.lineTo(p.x + radius + 9, p.y);
+    overlayCtx.moveTo(p.x, p.y - radius - 9); overlayCtx.lineTo(p.x, p.y - radius + 3);
+    overlayCtx.moveTo(p.x, p.y + radius - 3); overlayCtx.lineTo(p.x, p.y + radius + 9);
+    overlayCtx.stroke();
+    overlayCtx.beginPath();
+    overlayCtx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+    overlayCtx.fill();
 
-  const label = isLost ? '찌 놓침' : phase === PHASE.MONITORING ? `감시 ${Math.round(confidence * 100)}%` : `찌 ${Math.round(confidence * 100)}%`;
-  overlayCtx.font = '700 11px system-ui, sans-serif';
-  const textWidth = overlayCtx.measureText(label).width;
-  overlayCtx.fillStyle = 'rgba(3,15,21,.78)';
-  overlayCtx.beginPath();
-  roundedRectPath(overlayCtx, p.x - textWidth / 2 - 8, p.y + 29, textWidth + 16, 23, 7);
-  overlayCtx.fill();
-  overlayCtx.fillStyle = color;
-  overlayCtx.textAlign = 'center';
-  overlayCtx.textBaseline = 'middle';
-  overlayCtx.fillText(label, p.x, p.y + 40.5);
-  overlayCtx.restore();
+    if (showBaseline && unit.baselineY) {
+      const baseY = mediaToDisplay(0, unit.baselineY / ah * els.camera.videoHeight, vr).y;
+      overlayCtx.setLineDash([5, 5]);
+      overlayCtx.strokeStyle = 'rgba(255,255,255,.32)';
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(Math.max(vr.x, p.x - 64), baseY);
+      overlayCtx.lineTo(Math.min(vr.x + vr.width, p.x + 64), baseY);
+      overlayCtx.stroke();
+      overlayCtx.setLineDash([]);
+    }
+
+    // Label: a number badge when multiple floats, else a confidence chip.
+    const label = multi
+      ? (isLost ? `${index + 1} 놓침` : `${index + 1}번 ${Math.round(confidence * 100)}%`)
+      : (isLost ? '찌 놓침' : phase === PHASE.MONITORING ? `감시 ${Math.round(confidence * 100)}%` : `찌 ${Math.round(confidence * 100)}%`);
+    overlayCtx.font = '700 11px system-ui, sans-serif';
+    const textWidth = overlayCtx.measureText(label).width;
+    overlayCtx.fillStyle = 'rgba(3,15,21,.78)';
+    overlayCtx.beginPath();
+    roundedRectPath(overlayCtx, p.x - textWidth / 2 - 8, p.y + 29, textWidth + 16, 23, 7);
+    overlayCtx.fill();
+    overlayCtx.fillStyle = color;
+    overlayCtx.textAlign = 'center';
+    overlayCtx.textBaseline = 'middle';
+    overlayCtx.fillText(label, p.x, p.y + 40.5);
+    overlayCtx.restore();
+  });
 }
 
 function roundedRectPath(ctx, x, y, width, height, radius) {
@@ -1010,6 +854,7 @@ function drawMotionChart() {
   chartCtx.moveTo(0, height * 0.82); chartCtx.lineTo(width, height * 0.82);
   chartCtx.stroke();
   chartCtx.setLineDash([]);
+  const graph = primaryFloat()?.graph || [];
   const values = graph.length ? graph : Array.from({ length: 80 }, (_, i) => Math.sin(i * 0.2) * 0.018);
   const visible = values.slice(-150);
   chartCtx.beginPath();
@@ -1031,7 +876,6 @@ function drawMotionChart() {
 }
 
 function resetMetrics() {
-  graph = [];
   els.motionGauge.style.setProperty('--value', 0);
   els.motionScore.textContent = '0';
   els.verticalMove.textContent = '0.0';
@@ -1044,9 +888,8 @@ function resetMetrics() {
 
 function resetTarget(showMessage = true) {
   if (phase === PHASE.ALARM) cancelAlarm(false);
-  target = null;
-  calibrationSamples = [];
-  machine.set(TrackState.IDLE, performance.now());
+  floats = [];
+  calibFrames = 0;
   els.targetSwatch.style.background = '';
   els.targetColorText.textContent = '아직 없음';
   resetMetrics();
@@ -1083,8 +926,10 @@ function bindEvents() {
 
   els.cameraSelect?.addEventListener('change', async () => {
     if (isDemo) return;
-    try { await cameraCtl.start({ deviceId: els.cameraSelect.value }); configureCanvases(); resetTarget(false); setPhase(PHASE.CAMERA); startFrameLoop(); await refreshCameraControls(); }
-    catch (error) { console.error(error); showToast('카메라를 전환하지 못했어요.'); }
+    try {
+      await cameraCtl.start({ deviceId: els.cameraSelect.value });
+      configureCanvases(); resetTarget(false); setPhase(PHASE.CAMERA); startFrameLoop(); await refreshCameraControls();
+    } catch (error) { console.error(error); showToast('카메라를 전환하지 못했어요.'); }
   });
   els.zoomRange?.addEventListener('input', () => { cameraCtl.setZoom(Number(els.zoomRange.value)); });
 
@@ -1094,13 +939,23 @@ function bindEvents() {
   els.soundEnabled.addEventListener('change', () => { settings.soundEnabled = els.soundEnabled.checked; saveSettings(); if (!settings.soundEnabled) alarmCtl.stop(); else alarmCtl.ensureAudio(); });
   els.vibrationEnabled.addEventListener('change', () => { settings.vibrationEnabled = els.vibrationEnabled.checked; saveSettings(); });
   els.waveCorrection.addEventListener('change', () => { settings.waveCorrection = els.waveCorrection.checked; saveSettings(); });
+  els.multiSelect?.addEventListener('change', () => {
+    settings.multiSelect = els.multiSelect.checked;
+    saveSettings();
+    updateTapGuide();
+    showToast(settings.multiSelect ? `여러 찌를 선택할 수 있어요. (최대 ${MAX_FLOATS}개)` : '단일 찌 모드로 바꿨어요.');
+  });
   els.colorTolerance.addEventListener('input', () => { settings.colorTolerance = Number(els.colorTolerance.value); updateSettingLabels(); saveSettings(); });
 
   els.demoControls?.addEventListener('click', (event) => {
     const sceneBtn = event.target.closest('[data-demo-scene]');
-    if (sceneBtn) { demo.setScenario(sceneBtn.dataset.demoScene); flashDemoButton(sceneBtn); if (phase !== PHASE.MONITORING && (sceneBtn.dataset.demoScene === 'sink' || sceneBtn.dataset.demoScene === 'lift' || sceneBtn.dataset.demoScene === 'twitch')) showToast('움직임을 만들었어요. 알람을 보려면 감시 시작을 눌러주세요.'); return; }
-    const biteBtn = event.target.closest('[data-demo-bite]');
-    if (biteBtn) { demo.triggerBite(biteBtn.dataset.demoBite); if (phase !== PHASE.MONITORING) showToast('움직임을 만들었어요. 알람을 보려면 감시 시작을 눌러주세요.'); }
+    if (!sceneBtn) return;
+    const scene = sceneBtn.dataset.demoScene;
+    demo.setScenario(scene);
+    flashDemoButton(sceneBtn);
+    if (phase !== PHASE.MONITORING && (scene === 'sink' || scene === 'lift' || scene === 'twitch')) {
+      showToast('움직임을 만들었어요. 알람을 보려면 감시 시작을 눌러주세요.');
+    }
   });
 
   els.diagExportBtn?.addEventListener('click', exportDiagnostics);
@@ -1124,21 +979,10 @@ function bindEvents() {
   els.feedbackFalseBtn.addEventListener('click', () => { if (feedbackEventId) setFeedback(feedbackEventId, false); feedbackEventId = null; hideModal(els.feedbackModal); });
   els.feedbackSkipBtn.addEventListener('click', () => { feedbackEventId = null; hideModal(els.feedbackModal); });
 
-  window.addEventListener('beforeinstallprompt', (event) => { event.preventDefault(); deferredInstallPrompt = event; els.installBtn.classList.remove('hidden'); });
-  els.installBtn.addEventListener('click', async () => {
-    if (!deferredInstallPrompt) { showToast('브라우저 메뉴에서 “홈 화면에 추가”를 선택해주세요.'); return; }
-    deferredInstallPrompt.prompt();
-    await deferredInstallPrompt.userChoice;
-    deferredInstallPrompt = null;
-    els.installBtn.classList.add('hidden');
-  });
-  window.addEventListener('appinstalled', () => { deferredInstallPrompt = null; els.installBtn.classList.add('hidden'); showToast('찌봄을 홈 화면에 설치했어요.'); });
-
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       alarmCtl.reacquireIfNeeded();
     } else if (phase === PHASE.MONITORING) {
-      // The OS can throttle/stop a backgrounded tab's camera analysis.
       showToast('화면이 꺼지거나 다른 앱으로 가면 감시가 멈출 수 있어요.', 3500);
     }
   });
