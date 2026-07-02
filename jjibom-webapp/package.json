@@ -6,12 +6,14 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
+    "test:e2e": "node e2e/verify.mjs",
     "build:web": "node scripts/build-web.mjs",
     "cap:sync": "npm run build:web && npx cap sync android",
     "cap:open": "npx cap open android"
   },
   "devDependencies": {
-    "@capacitor/cli": "^6.1.0"
+    "@capacitor/cli": "^6.1.0",
+    "playwright-core": "^1.49.0"
   },
   "dependencies": {
     "@capacitor/core": "^6.1.0",
