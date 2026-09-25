@@ -1,0 +1,61 @@
+name: Web
+
+on:
+  push:
+    branches: [main, 'claude/**']
+    paths:
+      - 'jjibom-webapp/**'
+      - 'vercel.json'
+      - '.github/workflows/web.yml'
+  pull_request:
+    paths:
+      - 'jjibom-webapp/**'
+      - 'vercel.json'
+      - '.github/workflows/web.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: jjibom-webapp
+    env:
+      # The runner image ships Google Chrome; the E2E scripts drive it through playwright-core.
+      CHROMIUM_PATH: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: jjibom-webapp/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: E2E — screens and flows
+        run: npm run test:e2e:ui
+
+      - name: E2E — motion sensor path (DeviceMotionEvent)
+        run: npm run test:e2e:sensor
+
+      - name: E2E — camera path (fake webcam)
+        run: npm run test:e2e:camera
+
+      - name: Upload screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-shots
+          path: jjibom-webapp/e2e/shots/
+          if-no-files-found: ignore

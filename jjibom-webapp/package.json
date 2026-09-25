@@ -1,15 +1,20 @@
 {
   "name": "jjibom-webapp",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "description": "찌봄 — 스마트폰 카메라/진동 낚시찌 입질 감지 웹앱",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "test:e2e": "node e2e/verify.mjs",
+    "test:e2e": "node e2e/verify.mjs && node e2e/real-motion.mjs && node e2e/real-camera.mjs",
+    "test:e2e:ui": "node e2e/verify.mjs",
+    "test:e2e:sensor": "node e2e/real-motion.mjs",
+    "test:e2e:camera": "node e2e/real-camera.mjs",
     "build:web": "node scripts/build-web.mjs",
     "cap:sync": "npm run build:web && npx cap sync android",
-    "cap:open": "npx cap open android"
+    "cap:open": "npx cap open android",
+    "golden": "node scripts/export-motion-golden.mjs",
+    "icons": "node scripts/render-icons.mjs"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.2",
