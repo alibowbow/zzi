@@ -100,8 +100,9 @@ cd jjibom-webapp
 npm ci
 
 npm test                 # 단위 테스트 (node --test)
-npm run test:e2e         # 브라우저 E2E 전체 (UI · 실제 센서 경로 · 실제 카메라 경로)
+npm run test:e2e         # 브라우저 E2E 전체 (화면 · 배포 업그레이드 · 실제 센서 경로 · 실제 카메라 경로)
 npm run test:e2e:ui      #   화면 흐름만
+npm run test:e2e:upgrade #   배포 후 다시 찾은 방문자(서비스 워커 업그레이드)
 npm run test:e2e:sensor  #   DeviceMotionEvent 경로(60/20 Hz, 중력만 주는 기기)
 npm run test:e2e:camera  #   가짜 웹캠 영상으로 getUserMedia 경로
 
@@ -115,11 +116,13 @@ npm run icons            # icons/icon.svg → PNG 아이콘
 - 화면 문구에 새 한글을 넣었다면 글꼴 서브셋을 다시 만드세요(없는 글자는 `test/font.test.js`가 잡아냅니다):
   `pip install fonttools brotli` 후 `python3 scripts/subset-font.py <PretendardVariable.woff2 경로>`
 - 안드로이드 빌드: JDK 21, Android SDK 36. `cd android && ./gradlew testDebugUnitTest assembleDebug`
-- 서비스 워커 캐시는 `sw.js`의 `CACHE_VERSION`으로 관리합니다. 화면 자산을 바꿔 배포할 때 올려 주세요. 새 버전이 준비되면 앱 하단에 “새로고침” 배너가 뜹니다.
+- **배포와 업데이트**: 이 저장소의 기본 브랜치(`claude/blissful-knuth-5ahodj`)에 푸시하면 Vercel이 곧바로 운영 주소(zzi-rho.vercel.app)에 배포합니다. 배포할 때마다 릴리스 번호를 세 곳에서 함께 올리세요: `sw.js`의 `CACHE_VERSION`, `index.html`의 `data-release`, `styles.css`의 `--release`(하나라도 어긋나면 `test/release.test.js`가 실패합니다).
+  - 서비스 워커는 릴리스 전체를 한 캐시에 받아 두고 한 페이지를 늘 한 릴리스에서만 내줍니다. 그래서 두 릴리스의 파일이 섞이지 않습니다. 새 릴리스는 뒤에서 받아 바로 넘겨받고, 앱은 “새 버전이 준비됐어요 · 새로고침”을 띄웁니다(감시 중에는 띄우지 않음).
+  - v7까지의 옛 워커는 HTML만 새로 받고 스크립트·스타일은 캐시에서 꺼내 줬습니다. 그래서 배포 뒤 첫 방문에서 새 화면과 옛 코드가 섞여 멈출 수 있었습니다. `boot.js`가 스타일시트의 릴리스 표시를 페이지와 비교해, 다르면 옛 캐시를 지우고 한 번만 다시 불러와 이 문제를 막습니다. `npm run test:e2e:upgrade`가 이전 릴리스 → 현재 → 다음 배포 과정을 그대로 재현해 검증합니다.
 
 ### CI
 
-- **Web** (`.github/workflows/web.yml`): 단위 테스트 + 세 가지 E2E
+- **Web** (`.github/workflows/web.yml`): 단위 테스트 + E2E 네 가지(화면, 배포 업그레이드, 센서, 카메라)
 - **Android APK** (`.github/workflows/android.yml`): 단위 테스트 → 골든 파일 일치 검사 → Capacitor 동기화 → Java 단위 테스트 → 디버그 APK 업로드
 
 ## 파일 구성
@@ -127,6 +130,7 @@ npm run icons            # icons/icon.svg → PNG 아이콘
 ```text
 jjibom-webapp/
 ├── index.html · styles.css · app.js   화면 구조 · “Still Water” 디자인 · 오케스트레이션
+├── boot.js · sw.js          릴리스 단위 오프라인 캐시, 배포 뒤 옛 파일 섞임 방지
 ├── src/
 │   ├── ui/scene.js          살아 있는 호수 장면 (캔버스, 30 fps, 동작 줄이기 대응)
 │   ├── ui/seismograph.js    진동 모드 실시간 파형
@@ -141,10 +145,10 @@ jjibom-webapp/
 ├── fonts/                   Pretendard 서브셋 + 라이선스(OFL)
 ├── android/                 Capacitor 안드로이드 프로젝트
 │   └── app/src/main/java/app/jjibom/motion/   판정기(Java 포트) · foreground service · 알림 · 플러그인
-├── e2e/                     브라우저 E2E (UI · 실제 센서 · 실제 카메라) + 합성 영상 생성기
+├── e2e/                     브라우저 E2E (화면 · 배포 업그레이드 · 실제 센서 · 실제 카메라) + 합성 영상 생성기
 ├── test/                    Node 단위 테스트
 ├── scripts/                 build-web · export-motion-golden · render-icons · subset-font
-├── manifest.webmanifest · sw.js · icons/
+├── manifest.webmanifest · icons/
 ```
 
 ## 한계 (솔직하게)

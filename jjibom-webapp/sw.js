@@ -1,18 +1,23 @@
 // sw.js — classic service worker (no ES module imports here on purpose; a
 // classic worker is the most broadly supported). The caching policy mirrors the
 // tested helpers in src/swCache.js — keep the two in sync.
+//
+// One cache per release, filled all or nothing, and every page load is served
+// from a single release: files of two releases never mix. A new release is
+// fetched in the background, takes over at once, and the page offers a reload
+// (see registerServiceWorker in app.js).
 
-// Bump CACHE_VERSION on every deploy so the old app shell is dropped on
-// activate. The "v" number is the single source of truth for cache busting.
-const CACHE_VERSION = 'v7';
+// Bump on every deploy, together with data-release in index.html and --release
+// in styles.css (test/release.test.js keeps the three in step).
+const CACHE_VERSION = 'v8';
 const CACHE_PREFIX = 'jjibom-';
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 
-// Files that make up the offline app shell.
+// Everything the app loads (test/release.test.js checks nothing is missing).
 const APP_SHELL = [
-  './',
   './index.html',
   './styles.css',
+  './boot.js',
   './app.js',
   './manifest.webmanifest',
   './src/config.js',
@@ -51,15 +56,14 @@ const APP_SHELL = [
 ];
 
 self.addEventListener('install', (event) => {
-  // Pre-cache the shell, but do not fail the whole install if one optional file
-  // is missing. `reload` skips the HTTP cache: file names are not content-hashed,
-  // so a new version must never be filled from an older cached copy.
+  // The whole release or nothing: if one file fails, this worker is discarded
+  // and the current one keeps serving a complete release. `reload` bypasses the
+  // HTTP cache (file names are not content-hashed).
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => Promise.allSettled(
-      APP_SHELL.map((url) => cache.add(new Request(url, { cache: 'reload' })))
-    ))
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(APP_SHELL.map((url) => new Request(url, { cache: 'reload' }))))
+      .then(() => self.skipWaiting())
   );
-  // Do NOT skipWaiting automatically — the page asks the user first.
 });
 
 self.addEventListener('activate', (event) => {
@@ -73,66 +77,26 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Let the page trigger activation of a freshly installed worker.
+// Kept for pages from older releases that still send it.
 self.addEventListener('message', (event) => {
   if (event.data === 'SKIP_WAITING') self.skipWaiting();
 });
-
-function pickStrategy(pathname, isNavigation) {
-  if (isNavigation) return 'network-first';
-  if (/\.html?$/.test(pathname)) return 'network-first';
-  if (/\.(?:js|mjs|css|webmanifest|json)$/.test(pathname)) return 'swr';
-  return 'cache-first';
-}
 
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return; // don't touch cross-origin
-
-  const isNavigation = request.mode === 'navigate';
-  const strategy = pickStrategy(url.pathname, isNavigation);
-
-  if (strategy === 'network-first') {
-    event.respondWith(networkFirst(request));
-  } else if (strategy === 'swr') {
-    event.respondWith(staleWhileRevalidate(request));
-  } else {
-    event.respondWith(cacheFirst(request));
-  }
+  if (url.pathname.endsWith('/sw.js')) return;
+  const isPage = request.mode === 'navigate' && /(?:^|\/)(?:index\.html)?$/.test(url.pathname);
+  event.respondWith(fromRelease(request, isPage));
 });
 
-async function networkFirst(request) {
+// The app page and its files come from this release's cache; anything outside
+// the release goes to the network untouched.
+async function fromRelease(request, isPage) {
   const cache = await caches.open(CACHE_NAME);
-  try {
-    const response = await fetch(request);
-    if (response && response.ok) cache.put(request, response.clone());
-    return response;
-  } catch (error) {
-    const cached = await cache.match(request);
-    // Fall back to cached page, then to the app shell for navigations.
-    return cached || (request.mode === 'navigate' ? cache.match('./index.html') : Response.error());
-  }
-}
-
-async function staleWhileRevalidate(request) {
-  const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(request);
-  const network = fetch(request)
-    .then((response) => {
-      if (response && response.ok) cache.put(request, response.clone());
-      return response;
-    })
-    .catch(() => null);
-  return cached || network || fetch(request);
-}
-
-async function cacheFirst(request) {
-  const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(request);
+  const cached = await cache.match(isPage ? './index.html' : request);
   if (cached) return cached;
-  const response = await fetch(request);
-  if (response && response.ok) cache.put(request, response.clone());
-  return response;
+  return fetch(request);
 }

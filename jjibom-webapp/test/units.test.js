@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { rgbToHsv, matchPixel, representativeColor, hueDistance } from '../src/color.js';
 import { mediaDisplayRect, displayToMedia, mediaToDisplay } from '../src/geometry.js';
-import { obsoleteCaches, pickStrategy } from '../src/swCache.js';
+import { obsoleteCaches, isAppPage } from '../src/swCache.js';
 import { median, mad, clamp } from '../src/stats.js';
 
 // --- color ----------------------------------------------------------------
@@ -76,12 +76,12 @@ test('obsoleteCaches keeps the current version and drops old prefixed ones', () 
   assert.deepEqual(result, ['jjibom-v1']);
 });
 
-test('pickStrategy picks fresh strategies for code and cache-first for assets', () => {
-  assert.equal(pickStrategy('/index.html'), 'network-first');
-  assert.equal(pickStrategy('/app.js'), 'swr');
-  assert.equal(pickStrategy('/src/blobTracker.js'), 'swr');
-  assert.equal(pickStrategy('/icons/icon-192.png'), 'cache-first');
-  assert.equal(pickStrategy('/whatever', true), 'network-first');
+test('only navigations to the app itself are answered with the release page', () => {
+  assert.equal(isAppPage('/', true), true);
+  assert.equal(isAppPage('/index.html', true), true);
+  assert.equal(isAppPage('/index.html', false), false); // a fetch, not a navigation
+  assert.equal(isAppPage('/app.js', true), false);
+  assert.equal(isAppPage('/fonts/Pretendard-LICENSE.txt', true), false);
 });
 
 // --- robust stats used by calibration ------------------------------------

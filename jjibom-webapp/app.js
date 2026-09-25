@@ -2065,6 +2065,7 @@ function onVisibilityChange() {
 // (The first install also changes the controller, and a reload at that moment
 // would throw away whatever the user had just started.)
 let reloadOnControllerChange = false;
+const PAGE_RELEASE = document.documentElement.dataset.release || '';
 
 async function registerServiceWorker() {
   // Inside the Android app the assets ship with the APK; a worker cache would
@@ -2073,15 +2074,23 @@ async function registerServiceWorker() {
   if (!('serviceWorker' in navigator) || !(window.isSecureContext || location.hostname === 'localhost')) return;
   try {
     const registration = await navigator.serviceWorker.register('./sw.js');
-    registration.addEventListener('updatefound', () => {
-      const installing = registration.installing;
-      if (!installing) return;
-      installing.addEventListener('statechange', () => {
-        if (installing.state === 'installed' && navigator.serviceWorker.controller) showUpdateBanner(registration);
-      });
-    });
+    // Once a worker has taken over, the only cache left is its release's.
+    // Offer a reload when that is not the release this page is running.
+    let offered = false;
+    const offerIfNewer = async () => {
+      const names = await caches.keys().catch(() => []);
+      if (offered || !names.some((n) => n.startsWith('jjibom-')) || names.includes(`jjibom-${PAGE_RELEASE}`)) return;
+      offered = true;
+      showUpdateBanner(registration);
+    };
+    const follow = (worker) => {
+      if (!worker) return;
+      worker.addEventListener('statechange', () => { if (worker.state === 'activated') offerIfNewer(); });
+    };
+    registration.addEventListener('updatefound', () => follow(registration.installing));
+    follow(registration.installing || registration.waiting); // an update already under way
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!reloadOnControllerChange) return;
+      if (!reloadOnControllerChange) { offerIfNewer(); return; }
       reloadOnControllerChange = false;
       window.location.reload();
     });

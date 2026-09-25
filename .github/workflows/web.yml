@@ -46,6 +46,9 @@ jobs:
       - name: E2E — screens and flows
         run: npm run test:e2e:ui
 
+      - name: E2E — returning visitor after a deploy (service worker upgrade)
+        run: npm run test:e2e:upgrade
+
       - name: E2E — motion sensor path (DeviceMotionEvent)
         run: npm run test:e2e:sensor
 

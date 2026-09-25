@@ -8,7 +8,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const www = join(root, 'www');
 
 const ASSETS = [
-  'index.html', 'styles.css', 'app.js', 'sw.js', 'manifest.webmanifest', 'src', 'icons', 'fonts'
+  'index.html', 'styles.css', 'boot.js', 'app.js', 'sw.js', 'manifest.webmanifest', 'src', 'icons', 'fonts'
 ];
 
 await rm(www, { recursive: true, force: true });

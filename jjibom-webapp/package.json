@@ -6,8 +6,9 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "test:e2e": "node e2e/verify.mjs && node e2e/real-motion.mjs && node e2e/real-camera.mjs",
+    "test:e2e": "node e2e/verify.mjs && node e2e/upgrade.mjs && node e2e/real-motion.mjs && node e2e/real-camera.mjs",
     "test:e2e:ui": "node e2e/verify.mjs",
+    "test:e2e:upgrade": "node e2e/upgrade.mjs",
     "test:e2e:sensor": "node e2e/real-motion.mjs",
     "test:e2e:camera": "node e2e/real-camera.mjs",
     "build:web": "node scripts/build-web.mjs",

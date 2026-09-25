@@ -15,6 +15,7 @@
 }
 
 :root {
+  --release: "v8"; /* must match data-release in index.html (boot.js checks) */
   color-scheme: dark;
   --ink-0: #020304;
   --ink-1: #05080b;

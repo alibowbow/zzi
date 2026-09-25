@@ -19,7 +19,7 @@ const MIME = {
 
 // The production headers from vercel.json (CSP included), so every E2E run
 // also proves the policy does not block anything the app needs.
-async function productionHeaders(path) {
+export async function productionHeaders(path) {
   try {
     const config = JSON.parse(await readFile(join(ROOT, '..', 'vercel.json'), 'utf8'));
     const out = {};
