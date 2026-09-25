@@ -4,7 +4,7 @@
 
 // Bump CACHE_VERSION on every deploy so the old app shell is dropped on
 // activate. The "v" number is the single source of truth for cache busting.
-const CACHE_VERSION = 'v5';
+const CACHE_VERSION = 'v7';
 const CACHE_PREFIX = 'jjibom-';
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 
@@ -39,16 +39,24 @@ const APP_SHELL = [
   './src/nativeBridge.js',
   './src/motionController.js',
   './src/motionScenarios.js',
+  './src/version.js',
+  './src/ui/scene.js',
+  './src/ui/seismograph.js',
+  './fonts/PretendardVariable-subset.woff2',
+  './icons/icon.svg',
   './icons/icon-192.png',
-  './icons/icon-512.png'
+  './icons/icon-512.png',
+  './icons/apple-touch-icon.png',
+  './icons/favicon-32.png'
 ];
 
 self.addEventListener('install', (event) => {
   // Pre-cache the shell, but do not fail the whole install if one optional file
-  // is missing.
+  // is missing. `reload` skips the HTTP cache: file names are not content-hashed,
+  // so a new version must never be filled from an older cached copy.
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => Promise.allSettled(
-      APP_SHELL.map((url) => cache.add(url))
+      APP_SHELL.map((url) => cache.add(new Request(url, { cache: 'reload' })))
     ))
   );
   // Do NOT skipWaiting automatically — the page asks the user first.

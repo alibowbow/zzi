@@ -133,7 +133,6 @@ export class DemoScene {
       if (env.occlude) this._drawOccluder(elapsed, width, floatX);
 
       ctx.restore();
-      this._drawCaption(width);
 
       requestAnimationFrame(draw);
     };
@@ -247,15 +246,6 @@ export class DemoScene {
     ctx.fillRect(sweep, -20, 46, WATER_Y + 30);
   }
 
-  _drawCaption(width) {
-    const ctx = this.ctx;
-    ctx.fillStyle = 'rgba(236,250,250,.78)';
-    ctx.font = '600 18px system-ui, sans-serif';
-    ctx.fillText('빨간 찌 끝을 터치해보세요', 34, 45);
-    ctx.fillStyle = 'rgba(236,250,250,.46)';
-    ctx.font = '500 13px system-ui, sans-serif';
-    ctx.fillText('아래 시나리오 버튼으로 다양한 상황을 시험할 수 있어요.', 34, 70);
-  }
 }
 
 function smoothStep(t) {

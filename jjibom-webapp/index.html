@@ -3,493 +3,521 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#07141d" />
-  <meta name="description" content="스마트폰 카메라로 낚시찌 움직임을 감지하고 알림을 주는 웹앱" />
+  <meta name="theme-color" content="#030507" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="description" content="찌봄 — 카메라로 찌를 보거나 낚싯대의 떨림으로 입질을 알려주는 낚시 입질 알람" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="찌봄" />
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="icon" href="icons/icon-192.png" />
-  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="preload" href="fonts/PretendardVariable-subset.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="styles.css" />
-  <title>찌봄 — 스마트 찌 감지</title>
+  <title>찌봄 · 입질 알람</title>
 </head>
 <body>
-  <div class="app-shell">
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-logo" viewBox="0 0 24 24"><path d="M11.3 1.6h1.4v4.1c1.9.45 3.2 2.2 3.2 4.3 0 1.4-.6 2.6-1.6 3.4L12 18.4l-2.3-5c-1-.8-1.6-2-1.6-3.4 0-2.1 1.3-3.85 3.2-4.3z" fill="currentColor" stroke="none"/><path d="M3.8 20.1c1.4 0 1.9-.9 3.3-.9s1.9.9 3.3.9 1.9-.9 3.3-.9 1.9.9 3.3.9 1.9-.9 3.3-.9"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M3.5 7.5h3l1.6-2.2h7.8l1.6 2.2h3v11.2h-17z"/><circle cx="12" cy="13" r="3.6"/></symbol>
+    <symbol id="i-vibe" viewBox="0 0 24 24"><rect x="7.5" y="3" width="9" height="18" rx="2.2"/><path d="M11 17.6h2M3.6 9v6M20.4 9v6"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.8v12.4L18.4 12z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-flip" viewBox="0 0 24 24"><path d="M4 8h2.6l1.6-2.2h7.6L17.4 8H20v10.4H4z"/><path d="m9.4 11.4-1.9 1.9 1.9 1.9M14.6 11.4l1.9 1.9-1.9 1.9"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="M19.5 11.5a7.5 7.5 0 1 0-2.2 5.3M19.5 4.6v6.9h-6.9"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-log" viewBox="0 0 24 24"><path d="M5 3.5h10.5L19 7v13.5H5z"/><path d="M8.5 11h7M8.5 14.5h7M8.5 18h4"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4.5 5.2c2.7-.9 5.2-.6 7.5 1v13.3c-2.3-1.6-4.8-1.9-7.5-1z"/><path d="M19.5 5.2c-2.7-.9-5.2-.6-7.5 1v13.3c2.3-1.6 4.8-1.9 7.5-1z"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19.5 14.6A8 8 0 0 1 9.4 4.5a8 8 0 1 0 10.1 10.1z"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9.5V4h5.5M20 9.5V4h-5.5M4 14.5V20h5.5M20 14.5V20h-5.5"/></symbol>
+    <symbol id="i-shrink" viewBox="0 0 24 24"><path d="M9.5 4v5.5H4M14.5 4v5.5H20M9.5 20v-5.5H4M14.5 20v-5.5H20"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 2.8 4.8 5.6v5.5c0 4.6 3 8.6 7.2 10.1 4.2-1.5 7.2-5.5 7.2-10.1V5.6z"/><path d="m9 12 2.1 2.1 4-4"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3.5 2.8 19.5h18.4z"/><path d="M12 9.5v4.6M12 17h.01"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v13m-5-5 5 5 5-5M5 20.5h14"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 20V7m-5 5 5-5 5 5M5 3.5h14"/></symbol>
+    <symbol id="i-wave" viewBox="0 0 24 24"><path d="M3 12h2.5l2-5.5 3 11 3-8.5 2 5h5.5"/></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 15V3.5m-4.5 4.5L12 3.5 16.5 8"/><path d="M4.5 13.5v6h15v-6"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l.9 12.5h9.2l.9-12.5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5h.01"/></symbol>
+    <symbol id="i-sound" viewBox="0 0 24 24"><path d="M4.5 9.5h3.5l4.5-4v13l-4.5-4H4.5z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/></symbol>
+    <symbol id="i-tap" viewBox="0 0 24 24"><path d="M9 11.5V5.2a1.7 1.7 0 0 1 3.4 0v5.3l4.9.9c1 .2 1.7 1.1 1.6 2.1l-.6 5.5H9.8L6.3 14.3a1.6 1.6 0 0 1 2.3-2.2z"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-tone-rise" viewBox="0 0 48 24"><path d="M4 18h6M13 14h6M22 10h6M31 6h6"/></symbol>
+    <symbol id="i-tone-beep" viewBox="0 0 48 24"><path d="M5 9h6M5 15h6M19 9h6M19 15h6M33 9h6M33 15h6"/></symbol>
+    <symbol id="i-tone-siren" viewBox="0 0 48 24"><path d="M3 16c5 0 6-10 11-10s6 10 11 10 6-10 11-10 6 10 9 10"/></symbol>
+  </svg>
+
+  <div class="app" id="app" data-mode="camera" data-tab="watch" data-phase="idle" data-motion="idle">
+
+    <!-- The world: a living lake, the camera's ambient light, grain. -->
+    <div class="world" aria-hidden="true">
+      <canvas id="scene" class="scene"></canvas>
+      <canvas id="ambient" class="ambient" width="64" height="36"></canvas>
+      <div class="grain"></div>
+      <div class="scrim scrim-top"></div>
+      <div class="scrim scrim-bottom"></div>
+    </div>
+
     <header class="topbar">
-      <a class="brand" href="#top" aria-label="찌봄 홈">
-        <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 32 32"><path d="M16 3v8"/><path d="M12.5 8.5h7L18 19h-4z"/><path d="M9 23c2.2-1.6 4.5-1.6 7 0s4.8 1.6 7 0"/></svg>
-        </span>
-        <span><strong>찌봄</strong><small>스마트 찌 감지</small></span>
-      </a>
-      <div class="top-actions">
-        <button id="helpBtn" class="icon-btn" type="button" aria-label="사용법" title="사용법">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.4 2.4 0 1 1 3.3 2.2c-.8.4-1.1.9-1.1 1.8M12 17h.01"/></svg>
-        </button>
+      <div class="wordmark"><svg><use href="#i-logo"/></svg><span>찌봄</span></div>
+      <nav class="modes" role="tablist" aria-label="감지 방식">
+        <button id="modeCameraBtn" type="button" role="tab" aria-selected="true" data-mode="camera">카메라</button>
+        <button id="modeMotionBtn" type="button" role="tab" aria-selected="false" data-mode="motion">진동</button>
+      </nav>
+      <div class="live" id="liveChip" hidden><i></i><span id="liveChipText">감시 중</span></div>
+      <div class="topbar-actions">
+        <button id="nightBtn" class="icon-btn" type="button" aria-pressed="false" aria-label="야간 화면" title="야간 화면"><svg><use href="#i-moon"/></svg></button>
+        <button id="focusBtn" class="icon-btn" type="button" aria-pressed="false" aria-label="집중 모드" title="집중 모드"><svg><use href="#i-expand"/></svg></button>
       </div>
     </header>
 
-    <main id="top">
-      <section class="hero">
-        <div>
-          <span class="eyebrow">SMART BITE ALERT</span>
-          <h1>찌는 앱이 보고,<br /><em>입질은 바로 알려줘요.</em></h1>
-          <p>카메라로 찌를 보거나, 폰을 낚싯대에 고정해 떨림으로 감지해요. 입질이 오면 소리와 진동으로 알려줍니다.</p>
-        </div>
-        <div class="hero-badge" aria-label="온디바이스 처리">
-          <svg viewBox="0 0 24 24"><path d="M12 2 4.5 5v5.4c0 5 3 9.4 7.5 11.1 4.5-1.7 7.5-6.1 7.5-11.1V5z"/><path d="m9 12 2 2 4-4"/></svg>
-          <span><strong>영상 전송 없음</strong><small>폰 안에서 분석</small></span>
-        </div>
-      </section>
+    <div class="banner" id="warnBanner" hidden role="alert">
+      <svg><use href="#i-warn"/></svg>
+      <div><strong id="warnTitle">감시에 문제가 있어요</strong><span id="warnText"></span></div>
+      <button id="warnClose" class="icon-btn small" type="button" aria-label="닫기"><svg><use href="#i-close"/></svg></button>
+    </div>
 
-      <section class="mode-switch" aria-label="감지 방식 선택">
-        <button type="button" class="mode-card active" id="modeCameraBtn" data-mode="camera" aria-pressed="true">
-          <span class="mode-ico"><svg viewBox="0 0 24 24"><path d="M14.5 6 13 4H7L5.5 6H3v13h18V6z"/><circle cx="12" cy="12.5" r="4"/></svg></span>
-          <span class="mode-text"><strong>카메라 감지</strong><small>카메라로 찌의 움직임을 보고 입질을 알려드려요.</small></span>
-        </button>
-        <button type="button" class="mode-card" id="modeMotionBtn" data-mode="motion" aria-pressed="false">
-          <span class="mode-ico"><svg viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2M3 9v6M21 9v6"/></svg></span>
-          <span class="mode-text"><strong>진동 감지</strong><small>폰을 낚싯대에 고정하고 떨림으로 입질을 알려드려요.</small></span>
-          <span class="mode-badge" id="motionModeBadge">화면을 켠 상태에서 사용</span>
-        </button>
-      </section>
-
-      <div id="cameraMode">
-      <section class="camera-card" aria-labelledby="cameraTitle">
-        <div class="section-heading camera-heading">
-          <div>
-            <span class="step-chip">01</span>
-            <div>
-              <h2 id="cameraTitle">카메라 감시</h2>
-              <p id="stateText">카메라를 켜고 찌를 선택하세요.</p>
-            </div>
-          </div>
-          <div class="status-pill" id="statusPill" data-status="idle">
-            <span class="status-dot"></span>
-            <span id="statusLabel">대기</span>
-          </div>
-        </div>
-
-        <div class="camera-stage" id="cameraStage">
+    <main id="view-watch" class="watch" aria-label="감시">
+      <!-- ================= CAMERA ================= -->
+      <div id="cameraMode" class="mode-layer">
+        <div class="stage" id="cameraStage">
           <video id="camera" autoplay muted playsinline aria-label="카메라 영상"></video>
           <canvas id="overlay" aria-label="찌 추적 표시"></canvas>
-          <canvas id="analysisCanvas" class="hidden-canvas" aria-hidden="true"></canvas>
-          <canvas id="demoCanvas" class="hidden-canvas" aria-hidden="true"></canvas>
+          <canvas id="analysisCanvas" class="offscreen" aria-hidden="true"></canvas>
+          <canvas id="demoCanvas" class="offscreen" aria-hidden="true"></canvas>
 
-          <div class="camera-empty" id="cameraEmpty">
-            <div class="empty-illustration" aria-hidden="true">
-              <div class="scan-corners"></div>
-              <div class="float-illustration"><i></i><b></b></div>
-              <div class="water-lines"><i></i><i></i><i></i></div>
-            </div>
-            <h3>먼저 카메라를 켜주세요</h3>
-            <p>실제 카메라 또는 데모 영상으로 바로 시험할 수 있어요.</p>
-            <div class="empty-actions">
-              <button id="startCameraBtn" class="btn primary" type="button">
-                <svg viewBox="0 0 24 24"><path d="M14.5 6 13 4H7L5.5 6H3v13h18V6z"/><circle cx="12" cy="12.5" r="4"/></svg>
-                카메라 켜기
-              </button>
-              <button id="startDemoBtn" class="btn secondary" type="button">
-                <svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/><circle cx="12" cy="12" r="10"/></svg>
-                데모 체험
-              </button>
+          <div class="hero" id="cameraEmpty">
+            <p class="micro"><b>Camera</b><span>카메라 감지</span></p>
+            <h1>찌는 제가<br /><span>지켜볼게요.</span></h1>
+            <p class="hero-sub">폰을 고정하고 찌 끝을 한 번 눌러 주세요. 잠김·솟음·토독을 바로 알려드려요.</p>
+          </div>
+
+          <div class="hud-top">
+            <span class="status" id="statusPill" data-status="idle"><i></i><b id="statusLabel">대기</b></span>
+            <div class="hud-tools">
+              <button id="resetTargetBtn" class="chip" type="button" hidden><svg><use href="#i-redo"/></svg>다시 선택</button>
+              <button id="flipCameraBtn" class="icon-btn glass" type="button" hidden aria-label="카메라 전환" title="카메라 전환"><svg><use href="#i-flip"/></svg></button>
+              <button id="stopCameraBtn" class="icon-btn glass" type="button" hidden aria-label="카메라 끄기" title="카메라 끄기"><svg><use href="#i-close"/></svg></button>
             </div>
           </div>
 
-          <div class="tap-guide hidden" id="tapGuide">
-            <span class="tap-ripple"></span>
-            <strong>화면의 찌 끝을 터치하세요</strong>
-            <small>밝고 선명한 부분을 선택하면 더 잘 찾아요</small>
+          <div class="coach" id="tapGuide" hidden>
+            <span class="coach-icon"><svg><use href="#i-tap"/></svg></span>
+            <span><strong id="tapGuideText">찌 끝을 톡 눌러 주세요</strong><small>밝고 또렷한 색 부분이 가장 잘 잡혀요</small></span>
           </div>
 
-          <div class="calibration-panel hidden" id="calibrationPanel">
-            <div class="spinner"></div>
-            <div><strong>물결을 배우는 중</strong><small id="calibrationText">폰을 움직이지 말아주세요 · 0%</small></div>
-          </div>
-
-          <div class="camera-hud hidden" id="cameraHud">
-            <div class="hud-item"><span>추적</span><strong id="confidenceText">—</strong></div>
-            <div class="hud-item"><span>프레임</span><strong id="fpsText">—</strong></div>
-            <div class="hud-item"><span>화면</span><strong id="wakeText">켜짐</strong></div>
-          </div>
-
-          <button id="flipCameraBtn" class="floating-icon top-left hidden" type="button" aria-label="카메라 전환" title="카메라 전환">
-            <svg viewBox="0 0 24 24"><path d="M4 7h3l2-2h6l2 2h3v11H4z"/><path d="m9 11-2 2 2 2m6-4 2 2-2 2"/></svg>
-          </button>
-
-          <button id="resetTargetBtn" class="floating-action top-right hidden" type="button">
-            <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
-            찌 다시 선택
-          </button>
-
-          <div class="alarm-layer hidden" id="alarmLayer" role="alert" aria-live="assertive">
-            <div class="alarm-rings"><i></i><i></i><i></i></div>
-            <span class="alarm-kicker">BITE DETECTED</span>
-            <h2 id="alarmTitle">입질 감지!</h2>
-            <p id="alarmReason">찌가 빠르게 움직였어요.</p>
-            <div class="alarm-score"><span>감지 강도</span><strong id="alarmScore">92</strong></div>
-            <button id="stopAlarmBtn" class="btn alarm-stop" type="button">알람 멈추기</button>
+          <div class="readouts" id="cameraHud" hidden>
+            <span><small>추적</small><b id="confidenceText">—</b></span>
+            <span class="fps"><small>분석</small><b id="fpsText">—</b><small>fps</small></span>
+            <span><small>화면</small><b id="wakeText">켜짐</b></span>
           </div>
         </div>
 
-        <div class="camera-toolbar">
-          <div class="color-target">
-            <span id="targetSwatch" class="target-swatch"></span>
-            <span><small>선택한 찌 색</small><strong id="targetColorText">아직 없음</strong></span>
+        <section class="deck" id="cameraDeck" aria-label="카메라 조작">
+          <p class="deck-line" id="stateText">카메라를 켜고 찌를 선택하세요.</p>
+          <ol class="deck-steps" aria-label="시작 순서">
+            <li><b>01</b><span><strong>폰 고정</strong><small>찌가 잘 보이게 거치대·삼각대로</small></span></li>
+            <li><b>02</b><span><strong>찌 끝 터치</strong><small>또렷한 색 부분을 한 번</small></span></li>
+            <li><b>03</b><span><strong>감시 시작</strong><small>2~3초 물결을 익힌 뒤 바로</small></span></li>
+          </ol>
+
+          <div class="progress" id="calibrationPanel" hidden>
+            <div class="progress-track"><div class="progress-fill" id="calibrationFill"></div></div>
+            <small id="calibrationText">폰을 움직이지 마세요 · 0%</small>
           </div>
-          <div class="toolbar-actions">
-            <button id="stopCameraBtn" class="text-btn hidden" type="button">카메라 끄기</button>
-            <button id="monitorBtn" class="btn primary monitor-btn" type="button" disabled>
-              <span class="record-dot"></span>
-              감시 시작
-            </button>
+
+          <div class="deck-live" id="deckLive" hidden>
+            <div class="score" id="cameraScore">
+              <strong id="motionScore">0</strong>
+              <small>입질 점수</small>
+            </div>
+            <div class="spark">
+              <canvas id="motionChart" aria-label="찌 위아래 움직임"></canvas>
+            </div>
+            <dl class="mini">
+              <div><dt>상하</dt><dd><b id="verticalMove">0.0</b>px</dd></div>
+              <div><dt>신뢰도</dt><dd><b id="confidenceMetric">0</b>%</dd></div>
+              <div><dt>보임</dt><dd><b id="areaMetric">0</b>%</dd></div>
+            </dl>
+          </div>
+
+          <div class="deck-actions">
+            <button id="startCameraBtn" class="btn ember xl" type="button"><svg><use href="#i-camera"/></svg><span>카메라 켜기</span></button>
+            <button id="startDemoBtn" class="btn glass xl" type="button"><svg><use href="#i-play"/></svg><span>데모</span></button>
+            <button id="monitorBtn" class="btn ember xl" type="button" hidden disabled><span class="rec"></span><span id="monitorBtnText">감시 시작</span></button>
+          </div>
+
+          <div class="deck-more" id="deckMore" hidden>
+            <details class="drawer" id="targetDrawer">
+              <summary><span>추적 대상</span><span class="swatch" id="targetSwatch"></span><b id="targetColorText">아직 없음</b></summary>
+              <label class="field" id="zoomControl" hidden>
+                <span>줌</span>
+                <input id="zoomRange" type="range" min="1" max="4" step="0.1" value="1" aria-label="카메라 줌" />
+              </label>
+              <label class="field" id="cameraSelectRow" hidden>
+                <span>카메라</span>
+                <select id="cameraSelect" aria-label="카메라 선택"></select>
+              </label>
+            </details>
+            <details class="drawer" id="demoControls" hidden>
+              <summary><span>데모 상황</span><b>바꿔 보기</b></summary>
+              <div class="chips">
+                <span class="chips-label">물 상태</span>
+                <button type="button" data-demo-scene="calm">잔잔</button>
+                <button type="button" data-demo-scene="waves">강한 파도</button>
+                <button type="button" data-demo-scene="shake">카메라 흔들림</button>
+                <button type="button" data-demo-scene="decoy">비슷한 색</button>
+                <button type="button" data-demo-scene="occlude">찌 가림</button>
+                <span class="chips-label">입질</span>
+                <button type="button" data-demo-scene="sink">푹 잠김</button>
+                <button type="button" data-demo-scene="lift">쑥 올라옴</button>
+                <button type="button" data-demo-scene="twitch">토독 떨림</button>
+                <span class="chips-label">추적</span>
+                <button type="button" data-demo-scene="hide">완전 가림</button>
+                <button type="button" data-demo-scene="reacquire">다시 찾기</button>
+              </div>
+            </details>
+          </div>
+        </section>
+      </div>
+
+      <!-- ================= MOTION ================= -->
+      <div id="motionMode" class="mode-layer" hidden>
+        <div class="stage motion-stage" id="motionStage">
+          <canvas id="seismo" class="seismo" aria-label="진동 파형"></canvas>
+
+          <div class="hero" id="motionHero">
+            <p class="micro"><b>Vibration</b><span>진동 감지</span></p>
+            <h1>낚싯대의 떨림으로<br /><span>입질을 알려요.</span></h1>
+            <p class="hero-sub">폰을 낚싯대에 단단히 고정하고 시작하세요. 6초 동안 평소 흔들림을 익힌 뒤 감시해요.</p>
+          </div>
+
+          <div class="hud-top">
+            <span class="status" id="motionStatusPill" data-status="idle"><i></i><b id="motionStatusLabel">대기</b></span>
+            <span class="bg-chip" id="motionBgChip"><svg><use href="#i-shield"/></svg><span id="motionBackground">화면 켜둔 채 사용</span></span>
+          </div>
+
+          <div class="readout" id="motionGaugeBig">
+            <strong id="motionScoreBig">0</strong>
+            <small id="motionBandText">대기</small>
           </div>
         </div>
 
-        <div class="camera-extra">
-          <label class="camera-extra-item hidden" id="zoomControl">
-            <span>줌</span>
-            <input id="zoomRange" type="range" min="1" max="4" step="0.1" value="1" aria-label="카메라 줌" />
-          </label>
-          <select id="cameraSelect" class="camera-select hidden" aria-label="카메라 선택"></select>
-        </div>
-
-        <div class="demo-controls hidden" id="demoControls">
-          <span>환경</span>
-          <button type="button" data-demo-scene="calm">잔잔</button>
-          <button type="button" data-demo-scene="waves">강한 파도</button>
-          <button type="button" data-demo-scene="shake">카메라 흔들림</button>
-          <button type="button" data-demo-scene="decoy">비슷한 색</button>
-          <button type="button" data-demo-scene="occlude">찌 가림</button>
-          <span>입질</span>
-          <button type="button" data-demo-scene="sink">푹 잠김</button>
-          <button type="button" data-demo-scene="lift">쑥 올라옴</button>
-          <button type="button" data-demo-scene="twitch">토독 떨림</button>
-          <span>추적</span>
-          <button type="button" data-demo-scene="hide">완전 실패</button>
-          <button type="button" data-demo-scene="reacquire">재획득</button>
-        </div>
-      </section>
-
-      <section class="dashboard-grid">
-        <article class="metric-card movement-card">
-          <div class="card-title-row">
-            <div>
-              <span class="step-chip">02</span>
-              <div><h2>실시간 움직임</h2><p>잔물결과 입질을 나눠서 봅니다.</p></div>
-            </div>
-            <span class="live-tag"><i></i> LIVE</span>
+        <section class="deck" id="motionDeck" aria-label="진동 조작">
+          <p class="deck-line" id="motionStateText">낚싯대에 폰을 고정하고 보정을 시작하세요.</p>
+          <ol class="deck-steps" aria-label="시작 순서">
+            <li><b>01</b><span><strong>낚싯대에 고정</strong><small>거치대·커플러로 흔들림 없이</small></span></li>
+            <li><b>02</b><span><strong>6초 보정</strong><small>낚싯대와 폰을 건드리지 않기</small></span></li>
+            <li><b>03</b><span><strong>감시</strong><small>강한 당김·토독·반복 진동을 알려요</small></span></li>
+          </ol>
+          <div class="progress" id="motionCalibPanel" hidden>
+            <div class="progress-track"><div class="progress-fill" id="motionCalibFill"></div></div>
+            <small id="motionCalibText">낚싯대와 폰을 건드리지 마세요 · 0%</small>
           </div>
-          <div class="movement-summary">
-            <div class="gauge" id="motionGauge" style="--value: 0">
-              <div><strong id="motionScore">0</strong><small>감지 강도</small></div>
-            </div>
-            <div class="movement-stats">
-              <div><span>상하 이동</span><strong id="verticalMove">0.0</strong><small>px</small></div>
-              <div><span>추적 신뢰도</span><strong id="confidenceMetric">0</strong><small>%</small></div>
-              <div><span>찌 보임</span><strong id="areaMetric">0</strong><small>%</small></div>
-            </div>
+          <dl class="mini" id="motionMini">
+            <div><dt>감시</dt><dd><b id="motionElapsed">0:00</b></dd></div>
+            <div><dt>진동</dt><dd><b id="motionMagnitude">0.00</b>m/s²</dd></div>
+            <div><dt>배터리</dt><dd><b id="motionBattery">—</b></dd></div>
+          </dl>
+          <div class="deck-actions">
+            <button id="motionCalibrateBtn" class="btn ember xl" type="button"><span class="rec"></span><span>보정하고 감시 시작</span></button>
+            <button id="motionStartBtn" class="btn glass xl" type="button" hidden>다시 감시</button>
+            <button id="motionStopBtn" class="btn stop xl" type="button" hidden><span class="rec"></span><span>감시 종료</span></button>
           </div>
-          <div class="chart-wrap">
-            <canvas id="motionChart" aria-label="찌 움직임 그래프"></canvas>
-            <div class="chart-label top">위</div>
-            <div class="chart-label bottom">아래</div>
+          <p class="deck-note" id="motionBgNote"></p>
+          <div class="deck-more">
+            <details class="drawer" id="motionDemoControls">
+              <summary><span>데모</span><b>센서 없이 체험</b></summary>
+              <div class="chips" id="motionDemoChips"></div>
+            </details>
           </div>
-
-          <details class="diag-panel" id="diagPanel">
-            <summary>개발자 진단 패널</summary>
-            <div class="diag-grid">
-              <div><span>상태</span><strong id="diagState">—</strong></div>
-              <div><span>추적 신뢰도</span><strong id="diagConfidence">—</strong></div>
-              <div><span>찌 좌표 x,y</span><strong id="diagPos">—</strong></div>
-              <div><span>보정 dy(정규화)</span><strong id="diagCorrectedDy">—</strong></div>
-              <div><span>배경 dy</span><strong id="diagBgDy">—</strong></div>
-              <div><span>기준 찌 높이</span><strong id="diagFloatHeight">—</strong></div>
-              <div><span>현재 찌 높이</span><strong id="diagCurHeight">—</strong></div>
-              <div><span>현재 면적비</span><strong id="diagAreaRatio">—</strong></div>
-              <div><span>입질 점수</span><strong id="diagBiteScore">—</strong></div>
-              <div><span>분석 FPS</span><strong id="diagFps">—</strong></div>
-            </div>
-            <button id="diagExportBtn" type="button" class="text-btn diag-export">최근 이벤트 JSON 내보내기</button>
-          </details>
-        </article>
-
-        <article class="settings-card">
-          <div class="card-title-row compact">
-            <div>
-              <span class="step-chip">03</span>
-              <div><h2>감지 설정</h2><p>낚시터 상황에 맞게 조절하세요.</p></div>
-            </div>
-          </div>
-
-          <label class="field-group">
-            <span class="field-label"><strong>민감도</strong><output id="sensitivityOutput">보통 6</output></span>
-            <input id="sensitivity" type="range" min="1" max="10" value="6" />
-            <span class="range-labels"><i>파도 큼</i><i>작은 입질</i></span>
-          </label>
-
-          <label class="field-group">
-            <span class="field-label"><strong>주요 입질 패턴</strong></span>
-            <select id="detectMode">
-              <option value="balanced">균형 모드 · 하강/상승/떨림</option>
-              <option value="sink">잠김 중심 · 찌가 내려갈 때</option>
-              <option value="lift">올림 중심 · 찌가 올라올 때</option>
-              <option value="twitch">떨림 중심 · 토독거릴 때</option>
-            </select>
-          </label>
-
-          <div class="toggle-list">
-            <label class="toggle-row">
-              <span><strong>야간 LED 모드</strong><small>어두운 화면에서 밝은 찌를 우선 추적</small></span>
-              <input id="nightMode" type="checkbox" /><i></i>
-            </label>
-            <label class="toggle-row">
-              <span><strong>알람 소리</strong><small>입질이 오면 세 번 울림</small></span>
-              <input id="soundEnabled" type="checkbox" checked /><i></i>
-            </label>
-            <label class="toggle-row">
-              <span><strong>진동 알림</strong><small>지원되는 휴대폰에서 작동</small></span>
-              <input id="vibrationEnabled" type="checkbox" checked /><i></i>
-            </label>
-            <label class="toggle-row">
-              <span><strong>파도 자동 보정</strong><small>평소 흔들림을 천천히 기준에 반영</small></span>
-              <input id="waveCorrection" type="checkbox" checked /><i></i>
-            </label>
-            <label class="toggle-row">
-              <span><strong>여러 찌 동시 선택</strong><small>화면을 여러 번 터치해 최대 4개까지 감시</small></span>
-              <input id="multiSelect" type="checkbox" /><i></i>
-            </label>
-          </div>
-
-          <details class="advanced-settings">
-            <summary>고급 설정</summary>
-            <label class="field-group">
-              <span class="field-label"><strong>색상 허용 범위</strong><output id="toleranceOutput">28</output></span>
-              <input id="colorTolerance" type="range" min="10" max="55" value="28" />
-              <span class="range-labels"><i>정확하게</i><i>넓게 찾기</i></span>
-            </label>
-          </details>
-        </article>
-      </section>
-
-      <section class="history-card">
-        <div class="card-title-row">
-          <div>
-            <span class="step-chip">04</span>
-            <div><h2>입질 기록</h2><p>감지 결과를 알려주면 다음 판단에 참고할 수 있어요.</p></div>
-          </div>
-          <button id="clearHistoryBtn" class="text-btn" type="button">기록 지우기</button>
-        </div>
-        <div id="historyList" class="history-list">
-          <div class="history-empty">
-            <svg viewBox="0 0 24 24"><path d="M4 4v16h16V8l-4-4z"/><path d="M8 13h8M8 17h5M15 4v5h5"/></svg>
-            <strong>아직 감지 기록이 없어요</strong>
-            <span>입질을 찾으면 시간과 움직임 종류를 남겨드려요.</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="field-tips">
-        <div>
-          <span class="tip-icon">1</span>
-          <p><strong>폰을 단단히 고정</strong><br />삼각대나 거치대를 쓰면 오작동이 크게 줄어요.</p>
-        </div>
-        <div>
-          <span class="tip-icon">2</span>
-          <p><strong>찌 끝을 크게 보이게</strong><br />카메라 화면에서 찌가 8픽셀 이상이면 좋아요.</p>
-        </div>
-        <div>
-          <span class="tip-icon">3</span>
-          <p><strong>실전 보조 도구</strong><br />알림만 믿지 말고 낚싯대와 주변 상황도 확인하세요.</p>
-        </div>
-      </section>
-      </div><!-- /cameraMode -->
-
-      <section id="motionMode" class="motion-mode hidden">
-        <article class="camera-card motion-card">
-          <div class="section-heading">
-            <div>
-              <span class="step-chip">01</span>
-              <div><h2>진동 감시</h2><p id="motionStateText">낚싯대에 폰을 고정하고 보정을 시작하세요.</p></div>
-            </div>
-            <div class="status-pill" id="motionStatusPill" data-status="idle">
-              <span class="status-dot"></span><span id="motionStatusLabel">대기</span>
-            </div>
-          </div>
-
-          <div class="motion-top">
-            <div class="motion-stat"><span>감시 시간</span><strong id="motionElapsed">0:00</strong></div>
-            <div class="motion-stat"><span>백그라운드 감시</span><strong id="motionBackground">웹: 불가</strong></div>
-            <div class="motion-stat"><span>배터리</span><strong id="motionBattery">—</strong></div>
-          </div>
-
-          <div class="motion-gauge-wrap">
-            <div class="gauge" id="motionGaugeBig" style="--value: 0">
-              <div><strong id="motionScoreBig">0</strong><small id="motionBandText">대기</small></div>
-            </div>
-            <div class="motion-meter">
-              <div class="motion-bar"><div class="motion-bar-fill" id="motionBarFill"></div></div>
-              <div class="motion-meter-legend"><i class="base"></i> 평소 흔들림 · <i class="trig"></i> 입질 판정선</div>
-              <div class="motion-readout"><span>현재 진동</span><strong id="motionMagnitude">0.00</strong><small>m/s²</small></div>
-            </div>
-          </div>
-
-          <div class="motion-calib hidden" id="motionCalibPanel">
-            <div class="spinner"></div>
-            <div><strong>평소 흔들림을 배우는 중</strong><small id="motionCalibText">낚싯대와 폰을 건드리지 마세요 · 0%</small></div>
-          </div>
-
-          <div class="motion-actions">
-            <button id="motionCalibrateBtn" class="btn primary" type="button">보정 시작</button>
-            <button id="motionStartBtn" class="btn secondary" type="button" disabled>감시 시작</button>
-            <button id="motionTestAlarmBtn" class="btn ghost" type="button">알람 시험</button>
-            <button id="motionStopBtn" class="text-btn" type="button">감시 종료</button>
-          </div>
-
-          <p class="motion-note" id="motionBgNote"></p>
-
-          <div class="demo-controls motion-demo" id="motionDemoControls"><span>데모</span></div>
-        </article>
-
-        <article class="settings-card motion-settings">
-          <div class="card-title-row compact">
-            <div><span class="step-chip">02</span><div><h2>진동 설정</h2><p>낚시 상황에 맞게 조절하세요.</p></div></div>
-          </div>
-          <label class="field-group">
-            <span class="field-label"><strong>민감도</strong><output id="motionSensOut">보통 5</output></span>
-            <input id="motionSensitivity" type="range" min="1" max="10" value="5" />
-            <span class="range-labels"><i>둔감</i><i>민감</i></span>
-          </label>
-          <div class="preset-row" id="motionPresets">
-            <button type="button" data-preset="3">둔감</button>
-            <button type="button" data-preset="5" class="active">보통</button>
-            <button type="button" data-preset="8">민감</button>
-          </div>
-          <label class="field-group">
-            <span class="field-label"><strong>입질 종류</strong></span>
-            <select id="motionPattern">
-              <option value="all">모두 감지</option>
-              <option value="strong">강한 당김</option>
-              <option value="tap">토독거림</option>
-              <option value="repeated">반복 진동</option>
-            </select>
-          </label>
-          <div class="toggle-list">
-            <label class="toggle-row"><span><strong>알람 소리</strong><small>입질이 오면 울림</small></span><input id="motionSound" type="checkbox" checked /><i></i></label>
-            <label class="toggle-row"><span><strong>알람 진동</strong><small>지원되는 휴대폰에서 작동</small></span><input id="motionVibration" type="checkbox" checked /><i></i></label>
-            <label class="toggle-row"><span><strong>화면 켜두기</strong><small>감시 중 화면이 꺼지지 않게</small></span><input id="motionKeepAwake" type="checkbox" checked /><i></i></label>
-            <label class="toggle-row"><span><strong>어두운 화면</strong><small>배터리 절약용 어두운 모드</small></span><input id="motionDark" type="checkbox" /><i></i></label>
-          </div>
-          <button id="motionExportBtn" class="text-btn" type="button">최근 이벤트 JSON 내보내기</button>
-        </article>
-
-        <article class="history-card motion-guide-card">
-          <details id="motionGuide" open>
-            <summary>진동 감지 사용 안내 · 안전</summary>
-            <ol class="how-list motion-how">
-              <li><span>1</span><div><strong>폰을 단단히 고정</strong><p>컵홀더·거치대·전용 커플러로 낚싯대에 흔들리지 않게 고정합니다.</p></div></li>
-              <li><span>2</span><div><strong>민감도 설정</strong><p>폰이 흔들리지 않는 상태에서 민감도를 정합니다.</p></div></li>
-              <li><span>3</span><div><strong>알림 시험</strong><p>“알람 시험”으로 소리와 진동을 확인합니다.</p></div></li>
-              <li><span>4</span><div><strong>보정 시작</strong><p>“보정 시작”을 누르고 낚싯대를 건드리지 않습니다.</p></div></li>
-              <li><span>5</span><div><strong>감시 시작</strong><p>보정이 끝나면 입질 감시가 시작됩니다.</p></div></li>
-              <li><span>6</span><div><strong>백그라운드</strong><p>안드로이드 앱에서는 다른 앱을 쓰거나 화면을 꺼도 감시가 계속됩니다.</p></div></li>
-            </ol>
-            <div class="notice-box">
-              <strong>안전 안내</strong>
-              <p>· 폰이 물에 빠지지 않도록 안전줄 사용을 권장합니다.<br />· 캐스팅할 때 폰을 낚싯대에 부착한 채 휘두르지 마세요.<br />· 거치대가 느슨하면 오탐이 늘 수 있습니다.</p>
-            </div>
-            <div class="motion-checks">
-              <button id="checkInstallBtn" class="btn secondary" type="button">설치 상태 확인</button>
-              <button id="checkSensorBtn" class="btn secondary" type="button">센서 확인</button>
-            </div>
-          </details>
-        </article>
-      </section>
+        </section>
+      </div>
     </main>
 
-    <footer>
-      <strong>찌봄 MVP</strong>
-      <span>영상·센서 데이터는 서버로 전송하거나 저장하지 않습니다.</span>
-    </footer>
+    <!-- ================= LOGBOOK ================= -->
+    <section class="panel" id="view-history" aria-label="기록" hidden>
+      <div class="panel-inner">
+        <header class="panel-head">
+          <p class="micro"><b>Logbook</b></p>
+          <h2>입질 기록</h2>
+        </header>
+        <div class="summary" aria-label="이번 세션">
+          <div class="summary-row">
+            <div><b id="sessionDuration">0분</b><span>감시</span></div>
+            <div><b id="sessionAlarms">0</b><span>알림</span></div>
+            <div><b id="sessionTrue">0</b><span>입질 맞음</span></div>
+            <div><b id="sessionFalse">0</b><span>오탐</span></div>
+          </div>
+          <p class="summary-foot"><span id="sessionSince">아직 시작 전</span> · 찌 놓침 <b id="sessionLost">0</b> · 배터리 사용 <b id="sessionBattery">—</b></p>
+        </div>
+        <div class="list-head">
+          <div class="filter" role="tablist" aria-label="기록 필터">
+            <button type="button" data-filter="all" aria-selected="true">전체</button>
+            <button type="button" data-filter="camera" aria-selected="false">카메라</button>
+            <button type="button" data-filter="motion" aria-selected="false">진동</button>
+          </div>
+          <div class="list-actions">
+            <button id="exportHistoryBtn" class="icon-btn" type="button" aria-label="기록 내보내기" title="기록 내보내기"><svg><use href="#i-export"/></svg></button>
+            <button id="clearHistoryBtn" class="icon-btn" type="button" aria-label="기록 지우기" title="기록 지우기"><svg><use href="#i-trash"/></svg></button>
+          </div>
+        </div>
+        <div id="historyList" class="timeline"></div>
+        <p class="footnote">알림마다 ‘맞음 / 오탐’을 남기면 적중률이 쌓이고, 카메라 감지는 오탐이 잦을 때 스스로 조금 둔감해져요. 기록은 이 기기에만 저장돼요.</p>
+      </div>
+    </section>
+
+    <!-- ================= SETTINGS ================= -->
+    <section class="panel" id="view-settings" aria-label="설정" hidden>
+      <div class="panel-inner">
+        <header class="panel-head">
+          <p class="micro"><b>Settings</b></p>
+          <h2>설정</h2>
+        </header>
+        <div class="settings-grid">
+          <div class="group">
+            <h3 class="group-title">알람</h3>
+            <div class="group-body">
+              <label class="row"><span><strong>알람 소리</strong><small>무음 모드에서도 들리도록 크게 울려요</small></span><input id="soundEnabled" type="checkbox" class="switch" checked /></label>
+              <label class="row"><span><strong>진동</strong><small>지원되는 폰에서 함께 울려요</small></span><input id="vibrationEnabled" type="checkbox" class="switch" checked /></label>
+              <div class="row stack">
+                <span><strong>알람음</strong><small>누르면 미리 들려드려요</small></span>
+                <div class="tones" id="alarmToneGroup" role="radiogroup" aria-label="알람음"></div>
+              </div>
+              <label class="row stack">
+                <span class="row-top"><strong>음량</strong><output id="alarmVolumeOut">100%</output></span>
+                <input id="alarmVolume" type="range" min="20" max="100" step="5" value="100" />
+              </label>
+              <label class="row"><span><strong>알람 길이</strong><small>이 시간이 지나면 저절로 멈춰요</small></span>
+                <select id="alarmDuration">
+                  <option value="10">10초</option>
+                  <option value="20" selected>20초</option>
+                  <option value="30">30초</option>
+                  <option value="60">60초</option>
+                </select>
+              </label>
+              <label class="row"><span><strong>감시 이상 경고</strong><small>찌를 오래 놓치거나 영상·센서가 끊기면 짧게 알려요</small></span><input id="failAlert" type="checkbox" class="switch" checked /></label>
+              <div class="row"><span><strong>알람 시험</strong><small>실제 알람과 같은 소리·진동</small></span><button id="testAlarmBtn" class="btn glass sm" type="button"><svg><use href="#i-sound"/></svg>시험</button></div>
+            </div>
+          </div>
+
+          <div class="group">
+            <h3 class="group-title">카메라 감지</h3>
+            <div class="group-body">
+              <label class="row stack">
+                <span class="row-top"><strong>민감도</strong><output id="sensitivityOutput">보통 6</output></span>
+                <input id="sensitivity" type="range" min="1" max="10" value="6" />
+                <span class="range-ends"><i>파도가 클 때</i><i>작은 입질까지</i></span>
+              </label>
+              <label class="row"><span><strong>주요 입질</strong></span>
+                <select id="detectMode">
+                  <option value="balanced">모두</option>
+                  <option value="sink">잠김 위주</option>
+                  <option value="lift">솟음 위주</option>
+                  <option value="twitch">토독 위주</option>
+                </select>
+              </label>
+              <label class="row"><span><strong>야간 LED 찌</strong><small>어두운 화면에서 빛나는 찌를 우선 추적</small></span><input id="nightMode" type="checkbox" class="switch" /></label>
+              <label class="row"><span><strong>파도 자동 보정</strong><small>평소 물결을 천천히 기준에 반영</small></span><input id="waveCorrection" type="checkbox" class="switch" checked /></label>
+              <label class="row"><span><strong>여러 찌 동시 감시</strong><small>화면을 여러 번 눌러 최대 4개</small></span><input id="multiSelect" type="checkbox" class="switch" /></label>
+              <label class="row stack">
+                <span class="row-top"><strong>색 허용 범위</strong><output id="toleranceOutput">28</output></span>
+                <input id="colorTolerance" type="range" min="10" max="55" value="28" />
+                <span class="range-ends"><i>정확하게</i><i>넓게 찾기</i></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="group">
+            <h3 class="group-title">진동 감지</h3>
+            <div class="group-body">
+              <label class="row stack">
+                <span class="row-top"><strong>민감도</strong><output id="motionSensOut">보통 5</output></span>
+                <input id="motionSensitivity" type="range" min="1" max="10" value="5" />
+                <div class="segment" id="motionPresets">
+                  <button type="button" data-preset="3">둔감</button>
+                  <button type="button" data-preset="5">보통</button>
+                  <button type="button" data-preset="8">민감</button>
+                </div>
+              </label>
+              <label class="row"><span><strong>입질 종류</strong></span>
+                <select id="motionPattern">
+                  <option value="all">모두</option>
+                  <option value="strong">강한 당김</option>
+                  <option value="tap">토독거림</option>
+                  <option value="repeated">반복 진동</option>
+                </select>
+              </label>
+              <label class="row"><span><strong>화면 켜두기</strong><small>웹 버전은 화면이 꺼지면 감시가 멈춰요</small></span><input id="motionKeepAwake" type="checkbox" class="switch" checked /></label>
+            </div>
+          </div>
+
+          <div class="group" id="nativeGroup" hidden>
+            <h3 class="group-title">안드로이드 앱</h3>
+            <div class="group-body">
+              <div class="row"><span><strong>알림</strong><small id="nativeNotifText">확인 중…</small></span><button id="nativeNotifBtn" class="btn glass sm" type="button">설정</button></div>
+              <div class="row"><span><strong>배터리 최적화</strong><small id="nativeBatteryText">확인 중…</small></span><button id="nativeBatteryBtn" class="btn glass sm" type="button">설정</button></div>
+              <div class="row"><span><strong>센서</strong><small id="nativeSensorText">확인 중…</small></span></div>
+            </div>
+          </div>
+
+          <div class="group">
+            <h3 class="group-title">정보</h3>
+            <div class="group-body">
+              <div class="row"><span><strong>버전</strong><small id="versionText">—</small></span><span class="pill" id="platformPill">웹</span></div>
+              <div class="row"><span><strong>기기 확인</strong><small id="envText">카메라·센서·화면 켜두기 지원을 확인해요</small></span><button id="checkEnvBtn" class="btn glass sm" type="button">확인</button></div>
+              <div class="row"><span><strong>사용 안내 다시 보기</strong></span><button id="replayOnboardingBtn" class="btn glass sm" type="button">보기</button></div>
+              <details class="row diag" id="diagPanel">
+                <summary><strong>개발자 진단</strong><small>카메라 추적 수치 · 이벤트 내보내기</small></summary>
+                <dl class="diag-grid">
+                  <div><dt>상태</dt><dd id="diagState">—</dd></div>
+                  <div><dt>추적 신뢰도</dt><dd id="diagConfidence">—</dd></div>
+                  <div><dt>찌 좌표</dt><dd id="diagPos">—</dd></div>
+                  <div><dt>보정 dy</dt><dd id="diagCorrectedDy">—</dd></div>
+                  <div><dt>배경 dy</dt><dd id="diagBgDy">—</dd></div>
+                  <div><dt>기준 찌 높이</dt><dd id="diagFloatHeight">—</dd></div>
+                  <div><dt>현재 찌 높이</dt><dd id="diagCurHeight">—</dd></div>
+                  <div><dt>면적비</dt><dd id="diagAreaRatio">—</dd></div>
+                  <div><dt>입질 점수</dt><dd id="diagBiteScore">—</dd></div>
+                  <div><dt>분석 FPS</dt><dd id="diagFps">—</dd></div>
+                </dl>
+                <div class="diag-actions">
+                  <button id="diagExportBtn" type="button" class="btn glass sm">카메라 이벤트 JSON</button>
+                  <button id="motionExportBtn" type="button" class="btn glass sm">진동 이벤트 JSON</button>
+                </div>
+              </details>
+            </div>
+          </div>
+        </div>
+        <p class="footnote center"><svg><use href="#i-shield"/></svg>영상과 센서 데이터는 폰 안에서만 분석하고 어디로도 보내지 않아요.</p>
+      </div>
+    </section>
+
+    <!-- ================= GUIDE ================= -->
+    <section class="panel" id="view-guide" aria-label="사용 안내" hidden>
+      <div class="panel-inner guide">
+        <header class="panel-head">
+          <p class="micro"><b>Field guide</b></p>
+          <h2>기다림은<br />찌봄에게 맡기세요.</h2>
+          <p class="lede">두 가지 방법 중 상황에 맞게 고르세요. 둘 다 폰 안에서만 분석해요.</p>
+        </header>
+
+        <article class="chapter">
+          <p class="chapter-no">01</p>
+          <h3>카메라 감지</h3>
+          <p class="chapter-sub">찌가 화면에 또렷하게 보일 때</p>
+          <ol class="steps">
+            <li><strong>폰을 단단히 고정하고 카메라 켜기</strong><p>삼각대·거치대를 쓰면 오작동이 크게 줄어요. 찌가 작게 보이면 줌을 올리세요.</p></li>
+            <li><strong>찌 끝을 톡 누르기</strong><p>빨강·주황·형광처럼 또렷한 색 부분을 누르세요. ‘여러 찌 동시 감시’를 켜면 최대 4개까지 고를 수 있어요.</p></li>
+            <li><strong>2~3초 보정</strong><p>평소 물결을 익히는 동안 폰을 건드리지 마세요.</p></li>
+            <li><strong>감시 시작</strong><p>잠김·솟음·토독을 구분해 알려줘요. 잠깐 가려지거나 카메라가 흔들리면 알람을 미루고, 멈추면 기준을 다시 잡아요.</p></li>
+          </ol>
+        </article>
+
+        <article class="chapter">
+          <p class="chapter-no">02</p>
+          <h3>진동 감지</h3>
+          <p class="chapter-sub">폰을 낚싯대에 고정할 때</p>
+          <ol class="steps">
+            <li><strong>낚싯대에 폰 고정</strong><p>거치대·커플러로 흔들리지 않게 고정하고, 물에 빠지지 않게 안전줄을 권해요.</p></li>
+            <li><strong>보정하고 감시 시작</strong><p>6초 동안 낚싯대를 건드리지 마세요. 평소 흔들림을 기준으로 익혀요.</p></li>
+            <li><strong>알람 확인</strong><p>강한 당김·토독·반복 진동을 구분해 알려줘요. 폰을 만지면 입질이 아니라 ‘재안정화’로 처리해요.</p></li>
+          </ol>
+          <p class="callout" id="guideBgNote"><svg><use href="#i-info"/></svg><span><strong>화면이 꺼져도 감시하려면 안드로이드 앱</strong>이 필요해요. 웹 버전은 화면이 켜져 있을 때만 감시하고, 다른 앱으로 가면 일시 정지돼요.</span></p>
+        </article>
+
+        <article class="chapter">
+          <p class="chapter-no">03</p>
+          <h3>잘 잡는 요령</h3>
+          <ul class="notes">
+            <li>민감도는 ‘보통’에서 시작해, 오탐이 잦으면 낮추고 놓치면 올리세요.</li>
+            <li>알람 뒤에 ‘맞음 / 오탐’을 눌러 두면 기록에서 적중률을 볼 수 있어요.</li>
+            <li>밤에는 위쪽 달 버튼으로 눈부심을 줄이고, 설정에서 ‘야간 LED 찌’를 켜세요.</li>
+            <li>시작 전 설정의 ‘알람 시험’으로 소리 크기를 확인하세요.</li>
+            <li>알람은 보조 도구예요. 낚싯대와 주변도 함께 살펴 주세요.</li>
+          </ul>
+        </article>
+
+        <article class="chapter">
+          <p class="chapter-no">04</p>
+          <h3>안전과 문제 해결</h3>
+          <ul class="notes">
+            <li>캐스팅할 때 폰을 낚싯대에 단 채로 휘두르지 마세요.</li>
+            <li>카메라·센서는 HTTPS 주소에서 권한을 허용해야 써요.</li>
+            <li>화면이 예전 그대로면 새 버전 알림에서 ‘새로고침’을 누르세요.</li>
+            <li>iPhone 웹 버전은 화면이 켜져 있을 때만 쓸 수 있고 진동 알림이 제한돼요.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <nav class="dock" aria-label="메뉴">
+      <button type="button" data-tab="watch" aria-current="page"><svg><use href="#i-eye"/></svg><span>감시</span></button>
+      <button type="button" data-tab="history"><svg><use href="#i-log"/></svg><span>기록</span><i class="badge" id="historyBadge" hidden></i></button>
+      <button type="button" data-tab="settings"><svg><use href="#i-sliders"/></svg><span>설정</span></button>
+      <button type="button" data-tab="guide"><svg><use href="#i-book"/></svg><span>안내</span></button>
+    </nav>
   </div>
 
-  <div class="modal-backdrop hidden" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
-    <div class="modal help-modal">
-      <button class="modal-close" id="closeHelpBtn" type="button" aria-label="닫기">×</button>
-      <span class="eyebrow">사용 설명서</span>
-      <h2 id="helpTitle">찌봄 사용법 🎣</h2>
-      <p class="help-intro">두 가지 방식으로 입질을 알려줘요. 홈 화면 위쪽에서 방식을 고르세요. 영상·센서 데이터는 서버로 보내지 않고 폰 안에서만 처리해요.</p>
-
-      <section class="help-section">
-        <div class="help-head"><span class="help-ico cam">📷</span><div><strong>① 카메라 감지</strong><small>찌가 화면에 잘 보이고 폰을 거치할 수 있을 때</small></div></div>
-        <ol class="how-list">
-          <li><span>1</span><div><strong>폰 고정 + 카메라 켜기</strong><p>거치대·삼각대로 흔들리지 않게 고정하고 ‘카메라 켜기’를 누르세요.</p></div></li>
-          <li><span>2</span><div><strong>찌 끝 터치</strong><p>빨강·주황·형광색처럼 또렷한 부분을 누르면 추적을 시작해요. 설정에서 ‘여러 찌 동시 선택’을 켜면 화면을 여러 번 터치해 최대 4개까지 감시할 수 있어요.</p></div></li>
-          <li><span>3</span><div><strong>보정 후 감시 시작</strong><p>2~3초 평소 물결을 배운 뒤 ‘감시 시작’을 눌러요. 잠깐 놓쳐도 입질로 오인하지 않아요.</p></div></li>
-        </ol>
-      </section>
-
-      <section class="help-section">
-        <div class="help-head"><span class="help-ico vib">📳</span><div><strong>② 진동 감지</strong><small>폰을 낚싯대에 고정할 때 · 카메라 불필요</small></div></div>
-        <ol class="how-list">
-          <li><span>1</span><div><strong>낚싯대에 폰 고정</strong><p>컵홀더·거치대·커플러로 단단히 고정하세요. 물에 빠지지 않게 안전줄을 권장해요.</p></div></li>
-          <li><span>2</span><div><strong>보정 시작</strong><p>낚싯대를 건드리지 말고 5~8초 기다려요. 평소 흔들림을 기준으로 배워요.</p></div></li>
-          <li><span>3</span><div><strong>감시 + 알람 시험</strong><p>보정이 끝나면 자동으로 감시해요. 강한 당김·토독·반복 진동을 구분해 알려주고, 폰을 건드리면 입질이 아니라 ‘재안정화’로 처리해요.</p></div></li>
-        </ol>
-        <div class="help-note">웹/브라우저 버전은 화면이 켜져 있을 때만 감시돼요. 다른 앱을 쓰거나 화면을 끄면 멈춥니다. 백그라운드(화면 꺼짐) 감시는 안드로이드 설치형 앱에서만 가능해요.</div>
-      </section>
-
-      <section class="help-section">
-        <div class="help-head"><span class="help-ico tip">💡</span><div><strong>잘 잡으려면</strong></div></div>
-        <ul class="help-tips">
-          <li>폰·거치대를 단단히 고정할수록 오작동이 크게 줄어요.</li>
-          <li>민감도는 ‘보통’에서 시작해 상황에 맞게 조절하세요.</li>
-          <li>카메라는 찌가 작으면 줌으로 키우고, 진동은 거치를 더 단단히.</li>
-          <li>카메라·센서 없이 ‘데모’ 버튼으로 미리 연습할 수 있어요.</li>
-          <li>알림은 보조 도구예요. 낚싯대와 주변 상황도 함께 확인하세요.</li>
-        </ul>
-      </section>
-
-      <div class="notice-box">
-        <strong>잘 안 되나요?</strong>
-        <p>· 카메라·센서는 HTTPS 주소(또는 localhost)에서 권한을 허용해야 써요.<br />· 새로고침해도 옛 화면이면 하단 ‘새 버전 새로고침’을 눌러요.<br />· iPhone에서는 화면이 켜져 있을 때만 시험 지원하고, 진동·화면꺼짐 알림은 제한될 수 있어요.</p>
+  <!-- ================= ALARM ================= -->
+  <div class="alarm" id="alarmScreen" hidden role="alertdialog" aria-modal="true" aria-labelledby="alarmTitle">
+    <div class="alarm-waves" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="alarm-body">
+      <p class="micro" id="alarmKicker"><b>Bite</b><span>입질 감지</span></p>
+      <h2 id="alarmTitle">입질!</h2>
+      <p class="alarm-reason" id="alarmReason">찌가 크게 움직였어요.</p>
+      <dl class="alarm-meta">
+        <div><dt>강도</dt><dd id="alarmScore">0</dd></div>
+        <div><dt>시각</dt><dd id="alarmTime">—</dd></div>
+      </dl>
+    </div>
+    <div class="alarm-actions">
+      <button id="stopAlarmBtn" class="alarm-stop" type="button">알람 끄기</button>
+      <div class="alarm-feedback" id="alarmFeedback">
+        <p>이번 알림은 입질이었나요?</p>
+        <div class="alarm-choices">
+          <button type="button" data-label="true_positive"><svg><use href="#i-check"/></svg>입질 맞아요</button>
+          <button type="button" data-label="false_positive">오탐이에요</button>
+          <button type="button" data-label="unsure">모르겠어요</button>
+        </div>
       </div>
-      <button id="helpOkayBtn" class="btn primary full" type="button">알겠어요</button>
     </div>
   </div>
 
-  <div class="modal-backdrop hidden" id="feedbackModal" role="dialog" aria-modal="true" aria-labelledby="feedbackTitle">
-    <div class="modal feedback-modal">
-      <span class="feedback-icon">🎣</span>
-      <h2 id="feedbackTitle">이번 알림은 맞았나요?</h2>
-      <p>한 번 눌러주면 기록에 표시됩니다.</p>
-      <div class="feedback-actions">
-        <button id="feedbackTrueBtn" class="btn success" type="button">맞아요, 입질이에요</button>
-        <button id="feedbackFalseBtn" class="btn secondary" type="button">아니에요, 오탐이에요</button>
+  <!-- ================= ONBOARDING ================= -->
+  <div class="onboarding" id="onboarding" hidden role="dialog" aria-modal="true" aria-labelledby="onboardTitle">
+    <div class="onboard-body">
+      <div class="onboard-slide" data-slide="0">
+        <p class="micro"><b>Still water</b><span>찌봄</span></p>
+        <h2 id="onboardTitle">기다림은<br /><span>찌봄에게.</span></h2>
+        <p>찌가 잠기거나 낚싯대가 떨리는 순간, 소리와 진동으로 바로 알려 드려요.</p>
       </div>
-      <button id="feedbackSkipBtn" class="text-btn" type="button">나중에 표시</button>
+      <div class="onboard-slide" data-slide="1" hidden>
+        <p class="micro"><b>Setup</b><span>준비</span></p>
+        <h2>폰 고정이<br /><span>전부예요.</span></h2>
+        <p>거치대·삼각대로 단단히 고정할수록 정확해져요. 낚싯대에 달 때는 안전줄을 써 주세요. 시작 전 ‘알람 시험’으로 소리도 확인해 두세요.</p>
+      </div>
+      <div class="onboard-slide" data-slide="2" hidden>
+        <p class="micro"><b>Privacy</b><span>개인정보</span></p>
+        <h2>모든 분석은<br /><span>폰 안에서.</span></h2>
+        <p>영상과 센서 데이터는 저장하거나 어디로도 보내지 않아요. <span id="onboardBgText">웹 버전은 화면이 켜져 있을 때만 감시해요.</span></p>
+      </div>
+      <div class="onboard-progress" id="onboardDots"><i class="on"></i><i></i><i></i></div>
+      <div class="onboard-actions">
+        <button id="onboardSkip" class="text-btn" type="button">건너뛰기</button>
+        <button id="onboardNext" class="btn ember xl" type="button">다음</button>
+      </div>
     </div>
   </div>
 
-  <div class="modal-backdrop hidden" id="motionAlarmModal" role="dialog" aria-modal="true" aria-labelledby="motionAlarmTitle">
-    <div class="modal feedback-modal">
-      <span class="feedback-icon">🎣</span>
-      <h2 id="motionAlarmTitle">입질 감지!</h2>
-      <p id="motionAlarmReason">낚싯대가 크게 흔들렸어요.</p>
-      <div class="alarm-score"><span>감지 강도</span><strong id="motionAlarmScore">0</strong></div>
-      <button id="motionAlarmStop" class="btn alarm-stop full" type="button">알람 멈추기</button>
-      <div class="feedback-actions motion-feedback">
-        <button data-mlabel="true_positive" class="btn success" type="button">입질 맞음</button>
-        <button data-mlabel="false_positive" class="btn secondary" type="button">오탐</button>
-      </div>
-      <button data-mlabel="unsure" class="text-btn" type="button">잘 모르겠음</button>
-    </div>
-  </div>
+  <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 
-  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-
-  <div id="updateBanner" class="update-banner hidden" role="status">
+  <div id="updateBanner" class="update" hidden role="status">
     <span>새 버전이 준비됐어요.</span>
     <button id="reloadBtn" type="button">새로고침</button>
   </div>

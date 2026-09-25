@@ -184,11 +184,11 @@ export class MotionController {
 
   _fireAlarm(event, now) {
     // Mute first so our own buzzer/sound is not re-detected as a bite.
-    this.gate.muteForSelfVibration(now);
+    this.gate.muteForSelfVibration(now, (this.settings.alarmSeconds ?? 20) * 1000 + MOTION.SELF_VIBE_GUARD_MS);
     this.machine.set(MotionState.ALARM, now);
     this._setState(MotionState.ALARM);
     this.lastAlarm = { ...event, timestamp: new Date().toISOString() };
-    this.alarm?.start({ sound: this.settings.sound, vibration: this.settings.vibration });
+    this.alarm?.start(this._alarmOptions());
     this.cb.onAlarm?.(this.lastAlarm, this._exportFor(event));
   }
 
@@ -210,9 +210,8 @@ export class MotionController {
       this.cb.onTestAlarm?.();
       return;
     }
-    this.gate.muteForSelfVibration(now);
-    this.alarm?.start({ sound: this.settings.sound, vibration: this.settings.vibration });
-    setTimeout(() => this.alarm?.stop(), 1500);
+    this.gate.muteForSelfVibration(now, 3000 + MOTION.SELF_VIBE_GUARD_MS);
+    this.alarm?.start(this._alarmOptions({ durationSec: 3 }));
     this.cb.onTestAlarm?.();
   }
 
@@ -347,6 +346,14 @@ export class MotionController {
       gyroPeak: peak('gmag'), userLabel: null, background: this.isNative(),
       screenOn: typeof document !== 'undefined' ? document.visibilityState === 'visible' : true,
       samples: samples.map((s) => ({ t: Math.round(s.t), amag: s.amag, araw: s.araw, gmag: s.gmag, jerk: s.jerk }))
+    };
+  }
+
+  _alarmOptions(extra = {}) {
+    const s = this.settings;
+    return {
+      sound: s.sound, vibration: s.vibration, tone: s.alarmTone || 'rise',
+      volume: s.volume ?? 1, durationSec: s.alarmSeconds ?? 20, ...extra
     };
   }
 
