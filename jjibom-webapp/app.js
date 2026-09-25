@@ -576,6 +576,15 @@ function configureCanvases() {
 // ==========================================================================
 // Camera phase → chrome
 // ==========================================================================
+// The numbered start steps double as progress on wide screens:
+// done steps turn lume, the current one is marked, the rest wait.
+function markSteps(list, done, current) {
+  list.querySelectorAll('li').forEach((li, index) => {
+    const n = index + 1;
+    li.dataset.step = !current ? '' : n <= done ? 'done' : n === current ? 'now' : 'later';
+  });
+}
+
 function setPhase(next) {
   phase = next;
   const cameraOn = cameraCtl.isActive;
@@ -605,6 +614,8 @@ function setPhase(next) {
   els.monitorBtn.classList.toggle('stop', watching);
   els.monitorBtn.classList.toggle('ember', !watching);
   els.monitorBtnText.textContent = next === PHASE.MONITORING ? '감시 멈춤' : next === PHASE.ALARM ? '알람 끄기' : '감시 시작';
+  const [done, current] = { [PHASE.CAMERA]: [1, 2], [PHASE.CALIBRATING]: [2, 3], [PHASE.READY]: [2, 3] }[next] || [0, 0];
+  markSteps(els.cameraDeck.querySelector('.deck-steps'), done, current);
   renderLiveChip();
   updateScene();
   syncLayout();
@@ -1524,6 +1535,8 @@ function motionOnState(state) {
   els.motionStatusPill.dataset.status = state;
   els.motionStatusLabel.textContent = MotionStateLabel[state] || state;
   els.motionCalibPanel.hidden = state !== MotionState.CALIBRATING;
+  const setup = state === MotionState.REQUESTING_PERMISSION || state === MotionState.CALIBRATING;
+  markSteps(els.motionDeck.querySelector('.deck-steps'), setup ? 1 : 2, setup ? 2 : MOTION_RUNNING.has(state) ? 3 : 0);
   if (state === MotionState.CALIBRATING && was !== state) {
     els.motionCalibFill.style.width = '0%';
     els.motionCalibText.textContent = '낚싯대와 폰을 건드리지 마세요 · 0%';

@@ -410,6 +410,11 @@ body.toasting .readouts { opacity: 0; }
 .deck-steps span { display: grid; gap: 2px; }
 .deck-steps strong { font-size: 19px; font-weight: 720; letter-spacing: -0.035em; }
 .deck-steps small { font-size: 13.5px; color: var(--paper-3); }
+.deck-steps li { transition: opacity 0.4s var(--ease); }
+.deck-steps li[data-step="done"] { opacity: 0.55; }
+.deck-steps li[data-step="done"] b { color: var(--lume); }
+.deck-steps li[data-step="now"] { box-shadow: inset 2px 0 0 var(--ember); padding-left: 14px; background: linear-gradient(90deg, var(--ember-soft), transparent 70%); }
+.deck-steps li[data-step="later"] { opacity: 0.4; }
 
 /* buttons */
 .btn {
@@ -879,7 +884,6 @@ body.focus-mode .deck { bottom: calc(var(--safe-bottom) + 14px); }
     animation-name: rise;
   }
   body.focus-mode .deck { bottom: 24px; }
-  .app[data-phase="idle"] #cameraDeck .deck-steps, .app[data-motion="idle"] #motionDeck .deck-steps { display: grid; }
   #deckLive { flex: 1; min-height: 0; grid-template-columns: 1fr; grid-template-rows: auto minmax(120px, 1fr) auto; align-content: stretch; gap: 14px; }
   #deckLive .score strong { font-size: 96px; font-weight: 150; }
   #deckLive .spark { height: 100%; min-height: 120px; }
@@ -895,6 +899,10 @@ body.focus-mode .deck { bottom: calc(var(--safe-bottom) + 14px); }
   body.panel-open .toast { left: calc(50% + var(--rail) / 2); }
   .update { bottom: 24px; }
   .hero { padding-top: clamp(24px, 8vh, 96px); }
+}
+/* Tall enough wide screens: the start steps fill the deck column and track progress. */
+@media (min-width: 1024px) and (min-height: 600px) {
+  .app:not([data-phase="monitoring"]):not([data-phase="alarm"]) #cameraDeck .deck-steps, #motionDeck .deck-steps { display: grid; }
 }
 @media (orientation: landscape) and (max-height: 560px) {
   :root { --deck-w: 320px; --top-h: calc(var(--safe-top) + 54px); }
