@@ -1,8 +1,8 @@
 // E2E of the REAL web vibration path (not the replay demo): synthetic
 // DeviceMotionEvents at a chosen rate drive calibration -> armed -> bites ->
-// cooldown -> wind -> knock -> sensor dropout -> background pause, through the
-// same page code a phone runs. Runs at 60 Hz and 20 Hz (a slow sensor), plus a
-// gravity-only device (no linear acceleration).
+// cooldown -> wind -> knock (left at a new angle) -> sensor dropout ->
+// background pause, through the same page code a phone runs. Runs at 60 Hz and
+// 20 Hz (a slow sensor), plus a gravity-only device (no linear acceleration).
 import { launch, startServer, createReporter, SKIP_ONBOARDING, statusOf, isOpen } from './lib.mjs';
 
 const { server, base } = await startServer();
@@ -61,6 +61,7 @@ async function run(hz, gravityOnly) {
     }
     return out;
   }
+  const trail = (x) => x.trail.map((e) => `${e.ms}ms ${e.state}`).join(' > ');
 
   await page.click('#modeMotionBtn');
   await page.click('#motionCalibrateBtn');
@@ -84,10 +85,11 @@ async function run(hz, gravityOnly) {
   await setMode('touch');
   w = await watch(3500);
   r.step(w.alarms.length === 0 && w.states.has('stabilizing'), `${tag}: knock -> stabilizing, no alarm`, [...w.states].join('>'));
-  await page.evaluate(() => { window.__motion.tilt = 0; });
+  // The knock left the phone at a new angle (the tilt stays at 20°). Once it
+  // rests there, that angle is adopted and watching resumes on its own.
   await setMode('calm');
-  await watch(3500);
-  const trail = (x) => x.trail.map((e) => `${e.ms}ms ${e.state}`).join(' > ');
+  w = await watch(7000);
+  r.step(w.alarms.length === 0 && w.states.has('armed'), `${tag}: resting at the new angle -> watching again`, trail(w));
   await page.evaluate(() => { window.__motion.running = false; });
   const dropout = await watch(2600);
   await page.evaluate(() => { window.__motion.running = true; });

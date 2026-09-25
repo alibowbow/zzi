@@ -9,7 +9,7 @@ import { VARIANTS, runWebDetector } from '../scripts/export-motion-golden.mjs';
 
 const golden = readFileSync(new URL('../android/app/src/test/resources/motion-golden.txt', import.meta.url), 'utf8');
 
-test('pull and 토독 alarm; wind, knocks and dropouts do not', () => {
+test('pull and 토독 alarm; wind, knocks and dropouts do not; a new rest angle is adopted', () => {
   for (const v of VARIANTS) {
     const lines = runWebDetector(v);
     const ticks = lines.filter((l) => l.startsWith('T ')).map((l) => l.split(' '));
@@ -22,6 +22,11 @@ test('pull and 토독 alarm; wind, knocks and dropouts do not', () => {
     assert.equal(stateAt(36300), 'stabilizing', `${label} knock`);
     assert.equal(stateAt(43800), 'error', `${label} dropout`);
     assert.equal(stateAt(46000), 'armed', `${label} recovers`);
+    // Knocked at 47 s and left at a 20° angle: re-stabilising, then watching again.
+    assert.equal(stateAt(47400), 'stabilizing', `${label} second knock`);
+    assert.equal(stateAt(51000), 'stabilizing', `${label} still settling`);
+    assert.equal(stateAt(57000), 'armed', `${label} watching at the new angle`);
+    assert.equal(stateAt(59900), 'armed', `${label} stays armed`);
   }
 });
 

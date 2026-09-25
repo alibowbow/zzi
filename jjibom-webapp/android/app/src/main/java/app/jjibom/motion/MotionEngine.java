@@ -50,6 +50,8 @@ final class MotionEngine {
     private double lastContactAt = Double.NEGATIVE_INFINITY;
     private Baseline baseline;
     private boolean hidden;
+    private double restTilt;
+    private double restSince = Double.NaN;
 
     void setHasLinearSensor(boolean hasLinear) {
         this.hasLinear = hasLinear;
@@ -186,6 +188,7 @@ final class MotionEngine {
         }
         double latestT = window.isEmpty() ? monitorStart : Math.max(window.get(window.size() - 1).t, monitorStart);
         boolean stalled = now - latestT > MotionConst.SENSOR_STALL_MS;
+        trackRestAngle(window, now);
 
         Analysis a = MotionDetector.analyze(window, baseline, now, sensitivity, detectMode);
         if (a.contact) lastContactAt = now;
@@ -215,5 +218,26 @@ final class MotionEngine {
         out.alarm = fired;
         out.magnitude = window.isEmpty() ? 0 : window.get(window.size() - 1).amag;
         return out;
+    }
+
+    /**
+     * A knock can leave the phone resting at a new angle. Once it has stayed at
+     * that angle for REST_ADOPT_MS, the angle becomes the new rest angle, so
+     * watching resumes instead of waiting for the old angle forever.
+     */
+    private void trackRestAngle(List<Sample> window, double now) {
+        if (state != State.STABILIZING || window.isEmpty()) {
+            restSince = Double.NaN;
+            return;
+        }
+        double tilt = window.get(window.size() - 1).tilt;
+        if (Double.isNaN(restSince) || Math.abs(tilt - restTilt) > MotionConst.REST_TILT_TOL_DEG) {
+            restTilt = tilt;
+            restSince = now;
+        } else if (now - restSince >= MotionConst.REST_ADOPT_MS) {
+            baseline.baseTilt = tilt;
+            restTilt = tilt;
+            restSince = now;
+        }
     }
 }

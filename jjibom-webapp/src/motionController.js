@@ -152,6 +152,7 @@ export class MotionController {
     const latestT = this.buffer.length ? this.buffer[this.buffer.length - 1].t : this.monitorStart;
     const stalled = now - latestT > MOTION.SENSOR_STALL_MS;
     const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    this._trackRestAngle(now);
 
     const analysis = this.baseline
       ? analyzeMotion(this.buffer, this.baseline, { now, sensitivity: this.settings.sensitivity, detectMode: this.settings.detectMode })
@@ -347,6 +348,23 @@ export class MotionController {
       screenOn: typeof document !== 'undefined' ? document.visibilityState === 'visible' : true,
       samples: samples.map((s) => ({ t: Math.round(s.t), amag: s.amag, araw: s.araw, gmag: s.gmag, jerk: s.jerk }))
     };
+  }
+
+  // A knock can leave the phone resting at a new angle. Once it has stayed at
+  // that angle for REST_ADOPT_MS, the angle becomes the new rest angle, so
+  // watching resumes instead of waiting for the old angle forever.
+  _trackRestAngle(now) {
+    const latest = this.buffer[this.buffer.length - 1];
+    if (this.machine.state !== MotionState.STABILIZING || !latest || !this.baseline) { this.restSince = null; return; }
+    const tilt = latest.tilt ?? 0;
+    if (this.restSince == null || Math.abs(tilt - this.restTilt) > MOTION.REST_TILT_TOL_DEG) {
+      this.restTilt = tilt;
+      this.restSince = now;
+    } else if (now - this.restSince >= MOTION.REST_ADOPT_MS) {
+      this.baseline = { ...this.baseline, baseTilt: tilt };
+      this.restTilt = tilt;
+      this.restSince = now;
+    }
   }
 
   _alarmOptions(extra = {}) {

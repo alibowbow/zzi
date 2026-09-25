@@ -1549,7 +1549,7 @@ function motionOnState(state) {
     [MotionState.ARMED]: native ? '감시 중이에요. 화면을 꺼도 이어지고, 알림에서 끌 수 있어요.' : '낚싯대의 떨림을 감시하고 있어요. 화면을 켜 두세요.',
     [MotionState.POSSIBLE_BITE]: '큰 떨림을 지켜보는 중이에요…',
     [MotionState.ALARM]: '입질이 감지됐어요!',
-    [MotionState.STABILIZING]: '폰이 움직였어요. 다시 안정되길 기다리는 중…',
+    [MotionState.STABILIZING]: '폰이 움직였어요. 멈추면 그 각도에서 다시 감시해요.',
     [MotionState.PAUSED]: '화면을 벗어나 감시가 멈췄어요.',
     [MotionState.ERROR]: '센서 신호가 끊겼어요.',
     [MotionState.COOLDOWN]: '방금 알람 후 잠시 쉬었다가 다시 감시해요.'

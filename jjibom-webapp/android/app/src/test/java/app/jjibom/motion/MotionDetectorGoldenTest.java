@@ -21,9 +21,9 @@ import org.junit.Test;
 public class MotionDetectorGoldenTest {
 
     private static final double TICK_MS = 60;
-    private static final double END_MS = 47000;
-    private static final double[] SEG_START = {0, 9000, 10000, 19000, 20000, 30000, 36000, 39000, 42000, 44000};
-    private static final String[] SEG_MODE = {"calm", "pull", "calm", "tap2", "calm", "wind", "touch", "calm", "dropout", "calm"};
+    private static final double END_MS = 60000;
+    private static final double[] SEG_START = {0, 9000, 10000, 19000, 20000, 30000, 36000, 39000, 42000, 44000, 47000};
+    private static final String[] SEG_MODE = {"calm", "pull", "calm", "tap2", "calm", "wind", "touch", "calm", "dropout", "calm", "touch"};
 
     /** mulberry32, bit-identical to the JS generator. */
     private static final class Rng {

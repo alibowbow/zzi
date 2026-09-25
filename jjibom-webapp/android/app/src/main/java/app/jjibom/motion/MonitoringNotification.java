@@ -73,7 +73,7 @@ final class MonitoringNotification {
             case "possible_bite": return "입질 가능성 · 지켜보는 중";
             case "alarm": return "입질 감지!";
             case "cooldown": return "알람 직후 · 잠시 후 다시 감시해요";
-            case "stabilizing": return "폰이 흔들려 다시 안정시키는 중";
+            case "stabilizing": return "폰이 움직였어요 · 멈추면 그 각도에서 다시 감시";
             case "paused": return "일시 정지됨";
             case "error": return "센서 신호가 끊겼어요 · 폰과 거치 상태를 확인하세요";
             default: return "진동 감시 중 · 민감도 " + sensitivity;

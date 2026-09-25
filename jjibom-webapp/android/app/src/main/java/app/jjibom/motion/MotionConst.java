@@ -39,6 +39,8 @@ final class MotionConst {
     static final double CONTACT_ACCEL = 7.0;
     static final double CONTACT_TILT_DEG = 16;
     static final double STABILIZE_MS = 2500;
+    static final double REST_TILT_TOL_DEG = 3;
+    static final double REST_ADOPT_MS = 5000;
 
     static final int WOBBLE_SCORE = 40;
     static final int POSSIBLE_SCORE = 65;

@@ -18,11 +18,12 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(root, 'android/app/src/test/resources/motion-golden.txt');
 
 export const TICK_MS = 60;
-export const END_MS = 47000;
+export const END_MS = 60000;
 // [startMs, mode] — the stream is silent (no events) during 'dropout'.
 export const TIMELINE = [
   [0, 'calm'], [9000, 'pull'], [10000, 'calm'], [19000, 'tap2'], [20000, 'calm'],
-  [30000, 'wind'], [36000, 'touch'], [39000, 'calm'], [42000, 'dropout'], [44000, 'calm']
+  [30000, 'wind'], [36000, 'touch'], [39000, 'calm'], [42000, 'dropout'], [44000, 'calm'],
+  [47000, 'touch'] // knocked, and it stays at the new angle until the end
 ];
 export const VARIANTS = [
   { hz: 60, gravityOnly: false },
@@ -113,6 +114,9 @@ export function runWebDetector(variant) {
   machine.set(MotionState.ARMED, MOTION.CALIB_MS);
   let lastContactAt = -Infinity;
   let alarmAt = -Infinity;
+  let baseline = calib.stats;
+  let restTilt = 0;
+  let restSince = null;
   for (let now = MOTION.CALIB_MS + TICK_MS; now <= END_MS; now += TICK_MS) {
     feedUntil(now);
     let a = { score: 0, pattern: 'none', contact: false };
@@ -120,7 +124,12 @@ export function runWebDetector(variant) {
     if (machine.isMonitoring()) {
       const buffer = samples.filter((s) => s.t >= now - MOTION.BUFFER_MS && s.t <= now);
       const latestT = buffer.length ? buffer[buffer.length - 1].t : MOTION.CALIB_MS;
-      a = analyzeMotion(buffer, calib.stats, { now, sensitivity: 5, detectMode: 'all' });
+      // MotionController._trackRestAngle
+      const latest = buffer[buffer.length - 1];
+      if (machine.state !== MotionState.STABILIZING || !latest) restSince = null;
+      else if (restSince == null || Math.abs(latest.tilt - restTilt) > MOTION.REST_TILT_TOL_DEG) { restTilt = latest.tilt; restSince = now; }
+      else if (now - restSince >= MOTION.REST_ADOPT_MS) { baseline = { ...baseline, baseTilt: latest.tilt }; restTilt = latest.tilt; restSince = now; }
+      a = analyzeMotion(buffer, baseline, { now, sensitivity: 5, detectMode: 'all' });
       if (a.contact) lastContactAt = now;
       ev = gate.update(a.score, a.pattern, a.contact, now, machine.isListening());
       machine.update({

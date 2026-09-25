@@ -44,6 +44,8 @@ export const MOTION = Object.freeze({
   CONTACT_ACCEL: 7.0,            // m/s² — a hand-tap sized impact (raw, unsmoothed)
   CONTACT_TILT_DEG: 16,          // device tilt change marking a knock / re-seat
   STABILIZE_MS: 2500,            // re-stabilise window after contact
+  REST_TILT_TOL_DEG: 3,          // tilt wander still counted as "resting" at one angle
+  REST_ADOPT_MS: 5000,           // resting this long at a new angle => it becomes the rest angle
 
   // --- Scoring bands (0–100) --------------------------------------------
   WOBBLE_SCORE: 40,
