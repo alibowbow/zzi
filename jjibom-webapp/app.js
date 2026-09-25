@@ -2061,6 +2061,11 @@ function onVisibilityChange() {
 // ==========================================================================
 // Service worker, errors
 // ==========================================================================
+// Set when the user asked for the new version; the page reloads only then.
+// (The first install also changes the controller, and a reload at that moment
+// would throw away whatever the user had just started.)
+let reloadOnControllerChange = false;
+
 async function registerServiceWorker() {
   // Inside the Android app the assets ship with the APK; a worker cache would
   // only risk serving stale files after an app update.
@@ -2075,10 +2080,9 @@ async function registerServiceWorker() {
         if (installing.state === 'installed' && navigator.serviceWorker.controller) showUpdateBanner(registration);
       });
     });
-    let reloading = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (reloading) return;
-      reloading = true;
+      if (!reloadOnControllerChange) return;
+      reloadOnControllerChange = false;
       window.location.reload();
     });
   } catch (error) {
@@ -2093,7 +2097,11 @@ function showUpdateBanner(registration) {
     return;
   }
   els.updateBanner.hidden = false;
-  els.reloadBtn.addEventListener('click', () => { registration.waiting?.postMessage('SKIP_WAITING'); }, { once: true });
+  els.reloadBtn.addEventListener('click', () => {
+    if (!registration.waiting) { window.location.reload(); return; }
+    reloadOnControllerChange = true;
+    registration.waiting.postMessage('SKIP_WAITING');
+  }, { once: true });
 }
 
 let lastErrorToastAt = 0;

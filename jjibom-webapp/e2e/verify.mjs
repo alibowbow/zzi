@@ -58,9 +58,19 @@ try {
   r.watch(page);
 
   // ---------- first run ----------
+  let loads = 0;
+  page.on('load', () => { loads += 1; });
   await page.goto(base, { waitUntil: 'networkidle' });
   r.step((await page.title()).includes('찌봄'), 'page loads');
   r.step(await isOpen(page, '#onboarding'), 'first run shows onboarding');
+  // Installing the offline worker must not reload the page under the user.
+  const controlled = await page.evaluate(async () => {
+    await navigator.serviceWorker.ready;
+    for (let i = 0; i < 50 && !navigator.serviceWorker.controller; i += 1) await new Promise((res) => setTimeout(res, 100));
+    return Boolean(navigator.serviceWorker.controller);
+  }).catch(() => false);
+  await page.waitForTimeout(800);
+  r.step(controlled && loads === 1, 'first visit: offline worker takes over without a reload', `controlled=${controlled} loads=${loads}`);
   await shot('01-onboarding');
   await page.click('#onboardNext');
   await page.click('#onboardNext');
