@@ -2,10 +2,10 @@
 // and drives one or more FloatUnit trackers (multi-select). Heavy computation
 // lives in the testable modules under ./src.
 
-import { clamp, lerp } from './src/stats.js';
+import { clamp, lerp, median } from './src/stats.js';
 import { representativeColor, colorName, rgbToHex, luma } from './src/color.js';
 import { mediaDisplayRect, displayToMedia, mediaToDisplay } from './src/geometry.js';
-import { estimateBackgroundMotion } from './src/motionCompensation.js';
+import { estimateBackgroundMotion, frameDifference, isFrameUnstable } from './src/motionCompensation.js';
 import { TrackState } from './src/trackingState.js';
 import { FloatUnit } from './src/floatTracker.js';
 import { CameraController } from './src/camera.js';
@@ -104,6 +104,12 @@ let currLuma = null;
 let lumaSize = 0;
 let bgOffsetX = 0;             // shared, leaky-integrated background displacement
 let bgOffsetY = 0;
+// Camera-shake bookkeeping (whole frame, shared by every float).
+let frameDiff = 0;             // mean luma change vs previous frame (floats excluded)
+let calibDiffs = [];
+let sceneDiffBaseline = 0;     // calm-scene frame difference learned during calibration
+let lastShakeAt = -Infinity;
+let reanchorPending = false;
 
 const settings = Object.assign({
   sensitivity: 6, detectMode: 'balanced', nightMode: false,
@@ -386,6 +392,7 @@ function processFrame(now) {
       bgOffsetY *= 0.85;
     }
     floats.forEach((f) => f.track(frameImage, aw, ah, settings));
+    frameDiff = frameDifference(prevLuma, currLuma, aw, ah, floats.map((f) => floatExclusion(f, aw, ah)));
 
     if (phase === PHASE.CALIBRATING) handleCalibrationFrame(background);
     else if (phase === PHASE.MONITORING) handleMonitoringFrame(now, background);
@@ -396,6 +403,15 @@ function processFrame(now) {
   prevLuma = currLuma;
   currLuma = swap || new Float32Array(lumaSize);
   drawOverlay();
+}
+
+// Region around a float (including where it can sink to) that must not count
+// as scene change: the float moving is the signal, not camera shake.
+function floatExclusion(f, aw, ah) {
+  const r = Math.max(24, (f.floatHeight || f.heightEst || 12) * 3);
+  const x = clamp(Math.floor(f.x - r), 0, aw);
+  const y = clamp(Math.floor(f.y - r), 0, ah);
+  return { x, y, width: Math.min(aw - x, Math.ceil(r * 2)), height: Math.min(ah - y, Math.ceil(r * 3)) };
 }
 
 function fillLuma(data, aw, ah) {
@@ -456,6 +472,7 @@ function selectTarget(x, y) {
     }
 
     calibFrames = 0;
+    calibDiffs = [];
     floats.forEach((f) => f.beginCalibration());
     bgOffsetX = 0; bgOffsetY = 0;
     updateSelectionUi();
@@ -485,6 +502,7 @@ function handleCalibrationFrame(background) {
   calibFrames += 1;
   const bgMag = Math.hypot(background.dx, background.dy);
   floats.forEach((f) => f.calibrateStep(f.lastResult, bgMag));
+  if (calibFrames > 1) calibDiffs.push(frameDiff);
   const progress = clamp(calibFrames / CALIBRATION_FRAMES, 0, 1);
   if (els.calibrationText) els.calibrationText.textContent = `폰을 움직이지 말아주세요 · ${Math.round(progress * 100)}%`;
   updateTrackingUi(primaryFloat()?.lastResult);
@@ -507,6 +525,7 @@ function finalizeCalibration() {
     return;
   }
   floats = ok;
+  sceneDiffBaseline = calibDiffs.length ? median(calibDiffs) : 0;
   updateSelectionUi();
   if (failed.length) showToast(`찌 ${failed.length}개는 보정에 실패해 제외했어요.`, 3500);
   else showToast(floats.length > 1 ? `보정 완료! 찌 ${floats.length}개를 감시할 수 있어요.` : '보정 완료! 이제 감시를 시작할 수 있어요.');
@@ -524,6 +543,8 @@ function startMonitoring() {
   const now = performance.now();
   floats.forEach((f) => f.beginMonitoring(now));
   bgOffsetX = 0; bgOffsetY = 0;
+  lastShakeAt = -Infinity;
+  reanchorPending = false;
   setPhase(PHASE.MONITORING);
   alarmCtl.requestWakeLock();
   showToast(floats.length > 1 ? `찌 ${floats.length}개 감시를 시작했어요.` : '입질 감시를 시작했어요.');
@@ -538,12 +559,30 @@ function stopMonitoring() {
   showToast('감시를 잠시 멈췄어요.');
 }
 
+function detectSceneShake(now, background) {
+  const bgMag = Math.hypot(background.dx, background.dy);
+  const trusted = background.confidence >= SHAKE.MIN_CONFIDENCE;
+  const moved = trusted && floats.some((f) => bgMag / (f.floatHeight || 12) >= SHAKE.ALARM_SUPPRESS_NORM);
+  if (moved || isFrameUnstable(frameDiff, sceneDiffBaseline)) {
+    lastShakeAt = now;
+    reanchorPending = true;
+  } else if (reanchorPending && now - lastShakeAt >= SHAKE.SETTLE_MS) {
+    // The mount settled — possibly somewhere new. Re-anchor every float.
+    reanchorPending = false;
+    bgOffsetX = 0; bgOffsetY = 0;
+    floats.forEach((f) => f.reanchor(now));
+  }
+  return now - lastShakeAt < SHAKE.SUPPRESS_MS;
+}
+
 function handleMonitoringFrame(now, background) {
   let alarm = null;
   let alarmUnit = null;
   let message = null;
+  const shaking = detectSceneShake(now, background);
+  const scene = { background, bgOffsetY, shaking };
   floats.forEach((f) => {
-    const mon = f.monitor(f.lastResult, now, settings, adaptiveAdjustment, background, bgOffsetY);
+    const mon = f.monitor(f.lastResult, now, settings, adaptiveAdjustment, scene);
     if (mon.changed && mon.message && !message) message = mon.message;
     if (mon.alarmEvent && !alarm) { alarm = mon.alarmEvent; alarmUnit = f; }
   });
@@ -556,7 +595,10 @@ function handleMonitoringFrame(now, background) {
 function reflectTrackingState() {
   if (phase !== PHASE.MONITORING) return;
   const states = floats.map((f) => f.machine.state);
-  if (states.includes(TrackState.LOST)) {
+  if (performance.now() - lastShakeAt < SHAKE.SUPPRESS_MS) {
+    els.statusLabel.textContent = '흔들림';
+    els.stateText.textContent = '카메라가 흔들려 알람을 잠시 보류해요. 멈추면 기준을 다시 잡아요.';
+  } else if (states.includes(TrackState.LOST)) {
     els.statusLabel.textContent = '찌 놓침';
     els.stateText.textContent = '찌를 놓쳤어요. 화면과 조명을 확인해 주세요.';
   } else if (states.includes(TrackState.RECOVERING)) {

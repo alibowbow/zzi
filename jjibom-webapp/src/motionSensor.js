@@ -3,7 +3,7 @@
 // accelerationIncludingGravity is available, and watches for sensor stalls.
 // Browser-only.
 
-import { GravityFilter, Ema, magnitude3, tiltFromGravity } from './motionFilter.js';
+import { GravityFilter, Ema, magnitude3, tiltFromGravity, alphaForDt } from './motionFilter.js';
 import { MOTION } from './motionConfig.js';
 
 export class MotionSensor {
@@ -15,8 +15,8 @@ export class MotionSensor {
     this._watch = null;
     this.lastEventAt = 0;
     this.capabilities = { accelerometer: false, linearAcceleration: false, gyroscope: false };
-    this.gravity = new GravityFilter(MOTION.GRAVITY_LP_ALPHA);
-    this.accelEma = new Ema(MOTION.ACCEL_EMA_ALPHA);
+    this.gravity = new GravityFilter(alphaForDt(1000 / MOTION.TARGET_HZ, MOTION.GRAVITY_TAU_MS));
+    this.accelEma = new Ema(alphaForDt(1000 / MOTION.TARGET_HZ, MOTION.ACCEL_EMA_TAU_MS));
     this.prevAmag = null;
     this.prevT = null;
   }
@@ -70,6 +70,9 @@ export class MotionSensor {
     this.lastEventAt = t;
     const a = event.acceleration;
     const ag = event.accelerationIncludingGravity;
+    // Real gap since the previous event (clamped: first event / long stalls).
+    const dtMs = this.prevT != null ? Math.min(250, Math.max(2, t - this.prevT)) : 1000 / MOTION.TARGET_HZ;
+    const alphaG = alphaForDt(dtMs, MOTION.GRAVITY_TAU_MS);
 
     let lx; let ly; let lz;
     let gx = 0; let gy = 0; let gz = 9.81;
@@ -78,17 +81,18 @@ export class MotionSensor {
       this.capabilities.linearAcceleration = true;
       this.capabilities.accelerometer = true;
       lx = a.x; ly = a.y; lz = a.z;
-      if (ag && ag.x != null) { const grav = this.gravity.update(ag.x, ag.y, ag.z); gx = grav.gx; gy = grav.gy; gz = grav.gz; }
+      if (ag && ag.x != null) { const grav = this.gravity.update(ag.x, ag.y, ag.z, alphaG); gx = grav.gx; gy = grav.gy; gz = grav.gz; }
     } else if (ag && ag.x != null) {
       // Only gravity-included accel: low-pass to estimate and remove gravity.
       this.capabilities.accelerometer = true;
-      const r = this.gravity.update(ag.x, ag.y, ag.z);
+      const r = this.gravity.update(ag.x, ag.y, ag.z, alphaG);
       lx = r.lx; ly = r.ly; lz = r.lz; gx = r.gx; gy = r.gy; gz = r.gz;
     } else {
       return; // no usable acceleration this event
     }
 
-    const amag = this.accelEma.update(magnitude3(lx, ly, lz));
+    const araw = magnitude3(lx, ly, lz);
+    const amag = this.accelEma.update(araw, alphaForDt(dtMs, MOTION.ACCEL_EMA_TAU_MS));
     const rr = event.rotationRate;
     let gmag = 0;
     if (rr && (rr.alpha != null || rr.beta != null || rr.gamma != null)) {
@@ -104,6 +108,6 @@ export class MotionSensor {
     this.prevAmag = amag;
     this.prevT = t;
 
-    this.onSample?.({ t, amag, jerk, gmag, tilt, ax: lx, ay: ly, az: lz, interval: event.interval || 0 });
+    this.onSample?.({ t, amag, araw, jerk, gmag, tilt, ax: lx, ay: ly, az: lz, interval: event.interval || 0 });
   }
 }

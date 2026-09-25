@@ -12,11 +12,11 @@
     "cap:open": "npx cap open android"
   },
   "devDependencies": {
-    "@capacitor/cli": "^6.1.0",
+    "@capacitor/cli": "^8.5.2",
     "playwright-core": "^1.49.0"
   },
   "dependencies": {
-    "@capacitor/core": "^6.1.0",
-    "@capacitor/android": "^6.1.0"
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/android": "^8.5.2"
   }
 }

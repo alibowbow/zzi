@@ -72,27 +72,65 @@ function sad(prev, curr, width, px, py, patch, dx, dy) {
 }
 
 // Best integer translation for a single patch plus a distinctiveness measure.
+// Exhaustive over ±search: a coarse-to-fine search locks onto the wrong period
+// of repetitive texture (tree lines, ripples), and the full search is still
+// well under a millisecond per frame at analysis resolution.
 function matchPatch(prev, curr, width, px, py, patch, search) {
+  const side = search * 2 + 1;
+  const sads = new Float64Array(side * side);
   let bestSad = Infinity;
-  let secondSad = Infinity;
   let bestDx = 0;
   let bestDy = 0;
   for (let dy = -search; dy <= search; dy += 1) {
     for (let dx = -search; dx <= search; dx += 1) {
       const value = sad(prev, curr, width, px, py, patch, dx, dy);
-      if (value < bestSad) {
-        secondSad = bestSad;
-        bestSad = value;
-        bestDx = dx;
-        bestDy = dy;
-      } else if (value < secondSad) {
-        secondSad = value;
-      }
+      sads[(dy + search) * side + (dx + search)] = value;
+      if (value < bestSad) { bestSad = value; bestDx = dx; bestDy = dy; }
     }
   }
-  // Distinctiveness: a deep, unique minimum is trustworthy.
-  const distinct = secondSad > 0 ? clamp((secondSad - bestSad) / secondSad, 0, 1) : 0;
+  // Distinctiveness compares the minimum with the best match that is NOT next
+  // to it. Neighbouring offsets of a smooth real scene are naturally close, so
+  // comparing with them would wrongly distrust every real-world patch.
+  let secondSad = Infinity;
+  for (let dy = -search; dy <= search; dy += 1) {
+    for (let dx = -search; dx <= search; dx += 1) {
+      if (Math.max(Math.abs(dx - bestDx), Math.abs(dy - bestDy)) < 3) continue;
+      const value = sads[(dy + search) * side + (dx + search)];
+      if (value < secondSad) secondSad = value;
+    }
+  }
+  const distinct = secondSad > 0 && Number.isFinite(secondSad) ? clamp((secondSad - bestSad) / secondSad, 0, 1) : 0;
   return { dx: bestDx, dy: bestDy, distinct };
+}
+
+// Mean absolute luma change between two frames, sampled on a sparse grid and
+// skipping the float regions. A whole-frame jolt (knocked tripod) raises it far
+// above the calibrated ripple level even when block matching cannot follow the
+// motion, so it is a robust fallback shake indicator. `excludes` is a list of
+// { x, y, width, height } rects.
+export function frameDifference(prev, curr, width, height, excludes = [], step = SHAKE.DIFF_STEP) {
+  if (!prev || !curr || prev.length !== curr.length) return 0;
+  let sum = 0;
+  let n = 0;
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      let skip = false;
+      for (let e = 0; e < excludes.length; e += 1) {
+        const r = excludes[e];
+        if (x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) { skip = true; break; }
+      }
+      if (skip) continue;
+      const i = y * width + x;
+      sum += Math.abs(curr[i] - prev[i]);
+      n += 1;
+    }
+  }
+  return n ? sum / n : 0;
+}
+
+// True when the frame changed much more than the calibrated calm-water level.
+export function isFrameUnstable(diff, baseline) {
+  return diff > Math.max(SHAKE.DIFF_RATIO * (baseline || 0), SHAKE.DIFF_FLOOR);
 }
 
 // Estimate background translation (px) between two luma frames.

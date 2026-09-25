@@ -35,8 +35,12 @@ export function analyzeBite(samples, options = {}) {
   const detectMode = options.detectMode ?? 'balanced';
   const sensitivity = clamp(options.sensitivity ?? 0.5, 0, 1); // 0 = dull, 1 = sensitive
 
-  const windowed = samples.filter((s) => s.t >= now - windowMs);
-  const found = windowed.filter((s) => s.found);
+  // `since` restarts the window (e.g. after re-anchoring following a shake).
+  const since = Math.max(now - windowMs, options.since ?? -Infinity);
+  const windowed = samples.filter((s) => s.t >= since && s.t <= now);
+  // Samples taken while the camera was shaking are unreliable: never use them
+  // as bite evidence.
+  const found = windowed.filter((s) => s.found && !s.shaking);
   const empty = { score: 0, type: 'none', features: { reason: 'insufficient' } };
   if (found.length < 3) return empty;
 

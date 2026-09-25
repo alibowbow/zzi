@@ -20,14 +20,21 @@ export function tiltDelta(a, b) {
   return Math.abs(a - b);
 }
 
-// Exponential moving average as a tiny stateful object.
+// Per-sample smoothing factor for a first-order low pass with time constant
+// `tauMs`, given the actual gap since the previous sample.
+export function alphaForDt(dtMs, tauMs) {
+  return 1 - Math.exp(-Math.max(0, dtMs) / Math.max(1e-6, tauMs));
+}
+
+// Exponential moving average as a tiny stateful object. `alpha` may be given
+// per update (time-based smoothing with irregular sample spacing).
 export class Ema {
   constructor(alpha) {
     this.alpha = alpha;
     this.value = null;
   }
-  update(sample) {
-    this.value = this.value == null ? sample : this.value + (sample - this.value) * this.alpha;
+  update(sample, alpha = this.alpha) {
+    this.value = this.value == null ? sample : this.value + (sample - this.value) * alpha;
     return this.value;
   }
   reset() { this.value = null; }
@@ -41,12 +48,12 @@ export class GravityFilter {
     this.alpha = alpha;
     this.gx = null; this.gy = null; this.gz = null;
   }
-  update(x, y, z) {
+  update(x, y, z, alpha = this.alpha) {
     if (this.gx == null) { this.gx = x; this.gy = y; this.gz = z; }
     else {
-      this.gx += (x - this.gx) * this.alpha;
-      this.gy += (y - this.gy) * this.alpha;
-      this.gz += (z - this.gz) * this.alpha;
+      this.gx += (x - this.gx) * alpha;
+      this.gy += (y - this.gy) * alpha;
+      this.gz += (z - this.gz) * alpha;
     }
     return {
       lx: x - this.gx, ly: y - this.gy, lz: z - this.gz, // linear accel

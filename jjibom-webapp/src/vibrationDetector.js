@@ -3,7 +3,8 @@
 // sustained/repeated motion) and works in "excess over the calibrated baseline"
 // so sensitivity is mounting-independent. Pure (no DOM, no timers).
 //
-// Sample: { t, amag, jerk, gmag, tilt }  (amag = linear-accel magnitude m/s²)
+// Sample: { t, amag, araw?, jerk, gmag, tilt }
+//   amag = smoothed linear-accel magnitude (m/s²), araw = the unsmoothed one.
 
 import { clamp } from './stats.js';
 import { rms, countRisingEdges, countReversals, sensitivityToMad } from './motionFilter.js';
@@ -54,6 +55,9 @@ export function analyzeMotion(samples, baseline, opts = {}) {
   const longEdges = countRisingEdges(longSeries, peakThr, MOTION.PEAK_REFRACTORY_MS);
   const maxExcessShort = shortExcess.length ? Math.max(...shortExcess) : 0;
   const absPeak = maxExcessShort + accelMedian;
+  // Knocks are short; smoothing (and slow sensors) shave their peak, so the
+  // contact check also looks at the raw magnitude.
+  const rawPeak = shortSamples.reduce((m, s) => Math.max(m, s.araw ?? s.amag), 0);
 
   // Signed slope of accel magnitude -> direction reversals over the long window.
   const slopes = [];
@@ -73,7 +77,7 @@ export function analyzeMotion(samples, baseline, opts = {}) {
   const durationMs = aboveCount * dt;
 
   // Phone contact (a knock / re-seat) — NOT a bite.
-  const contact = absPeak > MOTION.CONTACT_ACCEL || tiltChange > MOTION.CONTACT_TILT_DEG;
+  const contact = Math.max(absPeak, rawPeak) > MOTION.CONTACT_ACCEL || tiltChange > MOTION.CONTACT_TILT_DEG;
 
   // Transient (impulsive bite) vs steady (wind) energy.
   const shortRmsE = rms(shortExcess);
@@ -92,8 +96,18 @@ export function analyzeMotion(samples, baseline, opts = {}) {
     ? clamp(0.5 * strongMag + 0.2 * gyroBoost + 0.3 * sustain, 0, 1)
     : clamp(0.3 * strongMag, 0, 0.5); // a lone spike cannot alarm by itself
 
-  // B. Tap (토독): ≥2 distinct bursts in the short window.
-  const tapCount = shortEdges.count;
+  // B. Tap (토독): ≥2 distinct bursts close together, the latest still fresh.
+  // Counted over TAP_WINDOW_MS (not the short window) so a pair ~250 ms apart
+  // stays visible long enough for the alarm gate to confirm it.
+  const tapTimes = longEdges.times.filter((t) => t >= now - MOTION.TAP_WINDOW_MS);
+  let tapCount = 0;
+  if (tapTimes.length && now - tapTimes[tapTimes.length - 1] <= shortMs) {
+    tapCount = 1;
+    for (let i = tapTimes.length - 1; i > 0; i -= 1) {
+      if (tapTimes[i] - tapTimes[i - 1] > MOTION.TAP_MAX_GAP_MS) break;
+      tapCount += 1;
+    }
+  }
   const tapScore = tapCount >= MOTION.TAP_MIN_PEAKS
     ? clamp((tapCount / MOTION.TAP_MIN_PEAKS) * 0.6 + ampFactor * 0.4, 0, 1)
     : 0;
@@ -131,8 +145,8 @@ export function analyzeMotion(samples, baseline, opts = {}) {
   return {
     score, pattern, contact,
     features: {
-      peakThr, absPeak, maxExcessShort, peakMad, transientRatio,
-      shortBursts: shortEdges.count, longBursts: longEdges.count, reversals,
+      peakThr, absPeak, rawPeak, maxExcessShort, peakMad, transientRatio,
+      shortBursts: shortEdges.count, longBursts: longEdges.count, tapCount, reversals,
       gyroPeakMad, tiltChange, durationMs, windiness, strongScore, tapScore, repeatedScore
     }
   };

@@ -33,6 +33,10 @@ export const MotionStateLabel = Object.freeze({
 const RUN = new Set([
   MotionState.ARMED, MotionState.POSSIBLE_BITE, MotionState.COOLDOWN, MotionState.STABILIZING
 ]);
+// States the per-frame update may leave on its own: the running states plus
+// PAUSED / ERROR, which must recover when the page is visible again / samples
+// resume (otherwise they would be dead ends).
+const UPDATABLE = new Set([...RUN, MotionState.PAUSED, MotionState.ERROR]);
 
 // Pure per-frame transition for the running states. `s` is the signal bundle.
 export function decideMotionTransition(state, s) {
@@ -91,9 +95,10 @@ export class MotionMachine {
   }
   timeInState(now) { return now - this.enteredAt; }
   isRunning() { return RUN.has(this.state); }
+  isMonitoring() { return UPDATABLE.has(this.state); }
 
   update(signals, now) {
-    if (!RUN.has(this.state)) return { state: this.state, changed: false };
+    if (!UPDATABLE.has(this.state)) return { state: this.state, changed: false };
     const next = decideMotionTransition(this.state, signals);
     const changed = next !== this.state;
     if (changed) { this.state = next; this.enteredAt = now; }

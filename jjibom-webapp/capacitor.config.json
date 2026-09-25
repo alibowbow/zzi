@@ -1,0 +1,11 @@
+{
+  "appId": "app.jjibom.motion",
+  "appName": "찌봄",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

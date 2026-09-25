@@ -146,11 +146,11 @@ export class MotionController {
       this.cb.onCalibrationProgress?.(Math.min(1, (now - this.calibStart) / MOTION.CALIB_MS));
       return;
     }
-    if (!this.machine.isRunning() && this.machine.state !== MotionState.PAUSED) return;
+    if (!this.machine.isMonitoring()) return;
 
     // Stall = no fresh samples in the buffer (works for live sensor AND replay).
     const latestT = this.buffer.length ? this.buffer[this.buffer.length - 1].t : this.monitorStart;
-    const stalled = this.machine.isRunning() && (now - latestT > MOTION.SENSOR_STALL_MS);
+    const stalled = now - latestT > MOTION.SENSOR_STALL_MS;
     const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
 
     const analysis = this.baseline
@@ -308,7 +308,7 @@ export class MotionController {
       baselineMad: this.baseline?.accelMad ?? 0, peakAcceleration: peak('amag'), peakJerk: peak('jerk'),
       gyroPeak: peak('gmag'), userLabel: null, background: this.isNative(),
       screenOn: typeof document !== 'undefined' ? document.visibilityState === 'visible' : true,
-      samples: samples.map((s) => ({ t: Math.round(s.t), amag: s.amag, gmag: s.gmag, jerk: s.jerk }))
+      samples: samples.map((s) => ({ t: Math.round(s.t), amag: s.amag, araw: s.araw, gmag: s.gmag, jerk: s.jerk }))
     };
   }
 

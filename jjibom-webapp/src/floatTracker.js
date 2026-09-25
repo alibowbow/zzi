@@ -31,6 +31,7 @@ export class FloatUnit {
     this.calib = [];
     this.lastFoundAt = 0; this.lowConfSince = 0; this.stableFrames = 0;
     this.shakingUntil = 0;
+    this.analysisSince = -Infinity;
     this.graph = [];
     this.lastResult = { found: false, x: this.x, y: this.y, area: 0, height: 0, confidence: 0, lostFrames: 0 };
     this.biteScore = 0; this.biteType = 'none'; this.yN = 0; this.correctedRel = 0;
@@ -163,15 +164,30 @@ export class FloatUnit {
     this.lastKnownY = this.y;
     this.prevTime = undefined;
     this._prevYN = undefined;
+    this.shakingUntil = 0;
+    this.analysisSince = now;
+  }
+
+  // After the camera/mount moved and settled, the float may sit at a new place
+  // in the frame. Take the current position as the new rest level and ignore
+  // everything recorded before, so the displacement is not read as a bite.
+  reanchor(now) {
+    if (this.lastResult.found) this.baselineY = this.lastResult.y;
+    this._prevYN = undefined;
+    this.analysisSince = now;
+    this.gate.reset();
   }
 
   stopMonitoring(now) {
     this.machine.set(TrackState.IDLE, now);
   }
 
-  // One monitoring frame. `background`/`bgOffsetY` are shared whole-frame values.
+  // One monitoring frame. `scene` holds the shared whole-frame values:
+  // { background, bgOffsetY, shaking } — shaking is the app-level verdict that
+  // the camera itself moved (block matching or a whole-frame luma jump).
   // Returns { alarmEvent|null, state, message, changed, biteScore, yN }.
-  monitor(result, now, settings, adaptiveAdjustment, background, bgOffsetY) {
+  monitor(result, now, settings, adaptiveAdjustment, scene) {
+    const { background, bgOffsetY } = scene;
     const floatHeight = this.floatHeight || 12;
     const dt = clamp((now - (this.prevTime || now - PROCESS_INTERVAL_MS)) / 1000, 0.03, 0.25);
     this.prevTime = now;
@@ -186,7 +202,7 @@ export class FloatUnit {
     const areaRatio = this.floatArea ? result.area / this.floatArea : 1;
     const heightRatio = floatHeight ? result.height / floatHeight : 1;
     const bgMagNorm = Math.hypot(background.dx, background.dy) / floatHeight;
-    if (background.confidence >= SHAKE.MIN_CONFIDENCE && bgMagNorm >= SHAKE.ALARM_SUPPRESS_NORM) {
+    if (scene.shaking || (background.confidence >= SHAKE.MIN_CONFIDENCE && bgMagNorm >= SHAKE.ALARM_SUPPRESS_NORM)) {
       this.shakingUntil = now + SHAKE.SUPPRESS_MS;
     }
     const shaking = now < this.shakingUntil;
@@ -200,7 +216,7 @@ export class FloatUnit {
     const sensitivity = (Number(settings.sensitivity) - 1) / 9;
     const adaptive = clamp(1 + adaptiveAdjustment, 0.78, 1.34);
     const bite = analyzeBite(this.diag.samples, {
-      now, windowMs: BITE.WINDOW_MS,
+      now, windowMs: BITE.WINDOW_MS, since: this.analysisSince,
       waveMadN: (this.waveMad / floatHeight) * adaptive,
       detectMode: settings.detectMode, sensitivity
     });

@@ -60,10 +60,14 @@ export const CALIB = Object.freeze({
 export const SHAKE = Object.freeze({
   SAMPLES: 8,                // background patches sampled for block matching
   PATCH_PX: 12,              // px — patch side
-  SEARCH_PX: 4,              // px — block-match search radius (±)
-  MIN_CONFIDENCE: 0.35,      // below this we do not trust / subtract bg motion
+  SEARCH_PX: 8,              // px — block-match search radius (±), coarse step 2
+  MIN_CONFIDENCE: 0.3,       // below this we do not trust / subtract bg motion
   ALARM_SUPPRESS_NORM: 0.6,  // normalized bg motion that pauses alarms
-  SUPPRESS_MS: 700           // how long a shake keeps alarms paused
+  SUPPRESS_MS: 1500,         // how long a measured shake keeps alarms paused
+  DIFF_STEP: 4,              // px — grid step for the whole-frame difference
+  DIFF_RATIO: 3,             // frame change this many × calm level => unstable
+  DIFF_FLOOR: 4,             // luma — never call a change below this unstable
+  SETTLE_MS: 1200            // ms — quiet time after a shake before re-anchoring
 });
 
 // --- Bite detection -----------------------------------------------------
