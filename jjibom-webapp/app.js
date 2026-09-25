@@ -16,7 +16,7 @@ import { ANALYSIS_MAX, PROCESS_INTERVAL_MS, CALIBRATION_FRAMES, SHAKE } from './
 import { MotionController } from './src/motionController.js';
 import { MotionState, MotionStateLabel } from './src/motionState.js';
 import { MOTION_SCENARIOS, generateScenario, DEMO_BASELINE } from './src/motionScenarios.js';
-import { isNativeAvailable, platform } from './src/nativeBridge.js';
+import { isNativeAvailable, isNativeApp, platform } from './src/nativeBridge.js';
 import { MOTION } from './src/motionConfig.js';
 
 const HISTORY_KEY = 'jjibom-history-v1';
@@ -1070,6 +1070,9 @@ function flashDemoButton(button) {
 // Service worker + update banner
 // ==========================================================================
 async function registerServiceWorker() {
+  // Inside the Android app the assets ship with the APK; a worker cache would
+  // only risk serving stale files after an app update.
+  if (isNativeApp()) return;
   if (!('serviceWorker' in navigator) || !(window.isSecureContext || location.hostname === 'localhost')) return;
   try {
     const registration = await navigator.serviceWorker.register('./sw.js');

@@ -2,10 +2,18 @@
   "appId": "app.jjibom.motion",
   "appName": "찌봄",
   "webDir": "www",
+  "backgroundColor": "#070B10",
   "android": {
-    "allowMixedContent": false
+    "allowMixedContent": false,
+    "backgroundColor": "#070B10"
   },
   "server": {
     "androidScheme": "https"
+  },
+  "plugins": {
+    "SystemBars": {
+      "style": "DARK",
+      "insetsHandling": "css"
+    }
   }
 }

@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="36%" r="78%">
+      <stop offset="0" stop-color="#1A2733"/>
+      <stop offset="0.55" stop-color="#0C141C"/>
+      <stop offset="1" stop-color="#05080C"/>
+    </radialGradient>
+    <linearGradient id="tip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF8A66"/>
+      <stop offset="1" stop-color="#FF4D3D"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2A3B49"/>
+      <stop offset="0.42" stop-color="#3C5263"/>
+      <stop offset="1" stop-color="#16222C"/>
+    </linearGradient>
+    <linearGradient id="collar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#E9E3D8"/>
+      <stop offset="0.45" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#BDB6AA"/>
+    </linearGradient>
+    <linearGradient id="sink" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="1"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="water">
+      <rect x="0" y="0" width="1024" height="704" fill="#fff"/>
+      <rect x="0" y="704" width="1024" height="120" fill="url(#sink)" opacity="0.3"/>
+    </mask>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4FE0B8" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#4FE0B8" stop-opacity="1"/>
+      <stop offset="1" stop-color="#4FE0B8" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+  </defs>
+
+  <rect class="bg" width="1024" height="1024" fill="url(#bg)"/>
+
+  <g class="art">
+    <!-- ripples, back halves (behind the float) -->
+    <path d="M176 704 A336 58 0 0 1 848 704" fill="none" stroke="url(#ring)" stroke-width="9" opacity="0.28"/>
+    <path d="M274 704 A238 41 0 0 1 750 704" fill="none" stroke="url(#ring)" stroke-width="11" opacity="0.55"/>
+    <path d="M384 704 A128 22 0 0 1 640 704" fill="none" stroke="#4FE0B8" stroke-width="12" opacity="0.75"/>
+
+    <!-- tip glow -->
+    <rect x="488" y="196" width="48" height="232" rx="24" fill="#FF5A4E" opacity="0.5" filter="url(#glow)"/>
+
+    <g mask="url(#water)">
+      <!-- tip (찌톱): coral segments -->
+      <rect x="498" y="180" width="28" height="78" rx="14" fill="url(#tip)"/>
+      <rect x="498" y="270" width="28" height="66" rx="5" fill="url(#tip)"/>
+      <rect x="498" y="348" width="28" height="80" rx="5" fill="url(#tip)"/>
+      <!-- collar -->
+      <rect x="487" y="426" width="50" height="24" rx="9" fill="url(#collar)"/>
+      <!-- slender body -->
+      <path d="M512 444 C 552 444 570 504 570 572 C 570 652 548 732 512 812 C 476 732 454 652 454 572 C 454 504 472 444 512 444 Z" fill="url(#body)"/>
+      <path d="M478 516 C 471 552 470 600 478 648" fill="none" stroke="#A9C0CF" stroke-width="9" stroke-linecap="round" opacity="0.38"/>
+    </g>
+
+    <!-- ripples, front halves (in front of the float) -->
+    <path d="M848 704 A336 58 0 0 1 176 704" fill="none" stroke="url(#ring)" stroke-width="9" opacity="0.28"/>
+    <path d="M750 704 A238 41 0 0 1 274 704" fill="none" stroke="url(#ring)" stroke-width="11" opacity="0.55"/>
+    <path d="M640 704 A128 22 0 0 1 384 704" fill="none" stroke="#4FE0B8" stroke-width="12" opacity="0.95"/>
+  </g>
+</svg>

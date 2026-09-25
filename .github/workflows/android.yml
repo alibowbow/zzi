@@ -1,0 +1,75 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main, 'claude/**']
+    paths:
+      - 'jjibom-webapp/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'jjibom-webapp/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: jjibom-webapp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: jjibom-webapp/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+          cache-dependency-path: |
+            jjibom-webapp/android/**/*.gradle*
+            jjibom-webapp/android/**/gradle-wrapper.properties
+
+      - name: Install
+        run: npm ci
+
+      - name: Web unit tests
+        run: npm test
+
+      - name: Native golden file matches the web detector
+        run: |
+          node scripts/export-motion-golden.mjs
+          git diff --exit-code android/app/src/test/resources/motion-golden.txt
+
+      - name: Bundle web assets into the Android project
+        run: npm run build:web && npx cap sync android
+
+      - name: Native unit tests + debug APK
+        working-directory: jjibom-webapp/android
+        run: ./gradlew --no-daemon --stacktrace testDebugUnitTest assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: jjibom-debug-apk
+          path: jjibom-webapp/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-reports
+          path: jjibom-webapp/android/app/build/reports/
+          if-no-files-found: ignore

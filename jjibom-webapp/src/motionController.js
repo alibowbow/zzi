@@ -35,7 +35,7 @@ export class MotionController {
     this.lastAlarm = null;
     this.replay = null;
     this.nativeListeners = [];
-    this.settings = { sensitivity: 5, detectMode: 'all', sound: true, vibration: true, keepAwake: true };
+    this.settings = { sensitivity: 5, detectMode: 'all', sound: true, vibration: true, keepAwake: true, alarmTone: 'rise', alarmSeconds: 8 };
   }
 
   isNative() { return isNativeAvailable(); }
@@ -164,7 +164,7 @@ export class MotionController {
     });
 
     if (analysis.contact) this.lastContactAt = now;
-    const event = this.gate.update(analysis.score, analysis.pattern, analysis.contact, now);
+    const event = this.gate.update(analysis.score, analysis.pattern, analysis.contact, now, this.machine.isListening());
     const signals = {
       score: analysis.score, contact: analysis.contact, alarmEmitted: Boolean(event),
       hidden, sensorStalled: stalled, stableMs: now - this.lastContactAt, cooldownActive: this.gate.isMuted(now)
@@ -196,7 +196,7 @@ export class MotionController {
     const now = performance.now();
     this.alarm?.stop();
     this.gate.muteForSelfVibration(now, 400); // ignore trailing buzz
-    if (this.isNative()) { nativeMotion.resumeMonitoring().catch(() => {}); return; }
+    if (this.isNative()) { nativeMotion.acknowledgeAlarm().catch(() => {}); return; }
     this.machine.dismissAlarm(now);
     this._setState(this.machine.state);
   }
@@ -204,6 +204,12 @@ export class MotionController {
   // A test alarm must never be recorded as a real bite.
   testAlarm() {
     const now = performance.now();
+    if (this.isNative()) {
+      // The service plays the real alarm (alarm volume stream + vibration).
+      nativeMotion.testAlarm(this.settings).catch(() => {});
+      this.cb.onTestAlarm?.();
+      return;
+    }
     this.gate.muteForSelfVibration(now);
     this.alarm?.start({ sound: this.settings.sound, vibration: this.settings.vibration });
     setTimeout(() => this.alarm?.stop(), 1500);
@@ -248,24 +254,56 @@ export class MotionController {
   }
 
   // ---- native path --------------------------------------------------------
-  async _startNative() {
-    this.nativeListeners.forEach((l) => l.remove?.());
+  // The Android service owns detection, alarm sound and vibration; this side
+  // only mirrors its state and events into the UI.
+  attachNative() {
+    if (!this.isNative() || this.nativeListeners.length) return;
     this.nativeListeners = [
       nativeMotion.addListener('stateChanged', (d) => { this.machine.state = d.state; this._setState(d.state); }),
-      nativeMotion.addListener('biteDetected', (d) => { this.lastAlarm = d; this.cb.onAlarm?.(d, d.export || null); }),
-      nativeMotion.addListener('metrics', (d) => this.cb.onMetrics?.(d)),
-      nativeMotion.addListener('sensorError', (d) => this.cb.onError?.(d.reason))
+      nativeMotion.addListener('biteDetected', (d) => {
+        this.lastAlarm = { ...d, at: performance.now() };
+        this.cb.onAlarm?.(this.lastAlarm, {
+          timestamp: d.timestamp, appVersion: MOTION_VERSION, mode: 'motion', source: 'native',
+          sensitivity: this.settings.sensitivity, predictedPattern: d.pattern, biteScore: d.score,
+          background: true, screenOn: d.screenOn, userLabel: null, samples: []
+        });
+      }),
+      nativeMotion.addListener('metrics', (d) => {
+        if (d.state === MotionState.CALIBRATING) this.cb.onCalibrationProgress?.(d.calibrationProgress || 0);
+        this.cb.onMetrics?.({ ...d, band: scoreToBand(d.score || 0) });
+      }),
+      nativeMotion.addListener('calibration', (d) => { if (d.ok) this.cb.onCalibrationDone?.(d); }),
+      nativeMotion.addListener('sensorError', (d) => {
+        if (d.reason === 'calibration') this.cb.onCalibrationFail?.(d.message, {});
+        else this.cb.onError?.(d.reason, d.message);
+      })
     ];
-    const perm = await nativeMotion.requestPermissions();
-    if (!perm?.granted) { this.cb.onError?.('permission'); return; }
-    await nativeMotion.startMonitoring(this.settings);
-    this.cb.onMonitorStart?.();
   }
 
+  async _startNative() {
+    this.attachNative();
+    try {
+      const perm = await nativeMotion.requestNotificationPermission();
+      // Detection and the alarm work without notifications; the UI explains
+      // that the lock-screen alert and the stop button in the shade are missing.
+      if (perm?.notifications !== 'granted') this.cb.onNotice?.('notifications-denied');
+    } catch { /* older app build without the method */ }
+    try {
+      await nativeMotion.startMonitoring(this.settings);
+      this.cb.onMonitorStart?.();
+    } catch (error) {
+      this.cb.onError?.('foreground', error?.message);
+    }
+  }
+
+  // Re-sync with the service (app reopened / resumed): its state is the truth.
   async refreshNativeState() {
     if (!this.isNative()) return null;
-    const state = await nativeMotion.getMonitoringState();
+    this.attachNative();
+    const state = await nativeMotion.getMonitoringState().catch(() => null);
     if (state?.state) { this.machine.state = state.state; this._setState(state.state); }
+    const events = await nativeMotion.getEvents().then((r) => r?.events || []).catch(() => []);
+    this.cb.onNativeSync?.(state, events);
     return state;
   }
 

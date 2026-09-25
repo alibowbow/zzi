@@ -1,14 +1,32 @@
-// nativeBridge.js — thin wrapper over the optional Capacitor "JjibomMotion"
-// plugin. Its ONLY job is to tell the app whether a real native background
-// service is available and to proxy calls/events to it.
+// nativeBridge.js — thin wrapper over the Capacitor "JjibomMotion" plugin that
+// ships inside the Android app (android/app/src/main/java/app/jjibom/motion).
+// It tells the app whether a real native background service exists and
+// proxies calls/events to it.
 //
 // In a plain browser / PWA the plugin is absent: isNativeAvailable() returns
 // false and the app uses the in-page web detector (which honestly cannot run in
 // the background). We never pretend native background exists when it does not.
 
+let cachedPlugin = null;
+
+function capacitor() {
+  return globalThis.Capacitor;
+}
+
 function plugin() {
-  const cap = globalThis.Capacitor;
-  return cap?.isNativePlatform?.() ? cap.Plugins?.JjibomMotion : null;
+  const cap = capacitor();
+  if (!cap?.isNativePlatform?.() || cap.getPlatform?.() !== 'android') return null;
+  if (!cachedPlugin) {
+    cachedPlugin = typeof cap.registerPlugin === 'function'
+      ? cap.registerPlugin('JjibomMotion')
+      : cap.Plugins?.JjibomMotion ?? null;
+  }
+  return cachedPlugin;
+}
+
+// True inside the installed app (Android WebView), whatever the plugin state.
+export function isNativeApp() {
+  return Boolean(capacitor()?.isNativePlatform?.());
 }
 
 export function isNativeAvailable() {
@@ -16,24 +34,48 @@ export function isNativeAvailable() {
 }
 
 export function platform() {
-  return globalThis.Capacitor?.getPlatform?.() ?? 'web';
+  return capacitor()?.getPlatform?.() ?? 'web';
 }
 
-// All methods are no-ops / defaults when native is absent; callers should branch
-// on isNativeAvailable() first.
+function call(method, arg) {
+  const p = plugin();
+  if (!p) return Promise.reject(new Error('native plugin unavailable'));
+  return p[method](arg);
+}
+
+// Settings the native service understands (the rest of the web settings stay web-only).
+export function nativeSettings(s) {
+  return {
+    sensitivity: Number(s.sensitivity) || 5,
+    detectMode: s.detectMode || 'all',
+    sound: s.sound !== false,
+    vibration: s.vibration !== false,
+    alarmTone: s.alarmTone || 'rise',
+    alarmSeconds: Number(s.alarmSeconds) || 8
+  };
+}
+
 export const nativeMotion = {
-  async isSupported() { return plugin() ? (await plugin().isSupported()).value : false; },
-  async getAvailableSensors() { return plugin() ? plugin().getAvailableSensors() : { accelerometer: false, gyroscope: false, linearAcceleration: false }; },
-  async requestPermissions() { return plugin() ? plugin().requestPermissions() : { granted: false }; },
-  async startMonitoring(settings) { return plugin()?.startMonitoring(settings); },
-  async pauseMonitoring() { return plugin()?.pauseMonitoring(); },
-  async resumeMonitoring() { return plugin()?.resumeMonitoring(); },
-  async stopMonitoring() { return plugin()?.stopMonitoring(); },
-  async getMonitoringState() { return plugin() ? plugin().getMonitoringState() : { state: 'idle', running: false }; },
-  async updateSettings(settings) { return plugin()?.updateSettings(settings); },
-  async getLatestMetrics() { return plugin() ? plugin().getLatestMetrics() : null; },
+  getInfo: () => call('getInfo'),
+  requestNotificationPermission: () => call('requestNotificationPermission'),
+  startMonitoring: (settings) => call('startMonitoring', nativeSettings(settings)),
+  stopMonitoring: () => call('stopMonitoring'),
+  pauseMonitoring: () => call('pauseMonitoring'),
+  resumeMonitoring: () => call('resumeMonitoring'),
+  updateSettings: (settings) => call('updateSettings', nativeSettings(settings)),
+  acknowledgeAlarm: () => call('acknowledgeAlarm'),
+  testAlarm: (settings) => call('testAlarm', nativeSettings(settings)),
+  getMonitoringState: () => call('getMonitoringState'),
+  getEvents: () => call('getEvents'),
+  clearEvents: () => call('clearEvents'),
+  openNotificationSettings: () => call('openNotificationSettings'),
+  openBatterySettings: () => call('openBatterySettings'),
+  openAppSettings: () => call('openAppSettings'),
+  // Capacitor returns a Promise<handle>; hide that so callers can remove() at once.
   addListener(eventName, cb) {
     const p = plugin();
-    return p ? p.addListener(eventName, cb) : { remove() {} };
+    if (!p) return { remove() {} };
+    const pending = Promise.resolve(p.addListener(eventName, cb));
+    return { remove: () => pending.then((h) => h?.remove?.()).catch(() => {}) };
   }
 };

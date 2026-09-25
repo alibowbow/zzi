@@ -96,6 +96,8 @@ export class MotionMachine {
   timeInState(now) { return now - this.enteredAt; }
   isRunning() { return RUN.has(this.state); }
   isMonitoring() { return UPDATABLE.has(this.state); }
+  // Only these states may turn a high score into an alarm.
+  isListening() { return this.state === MotionState.ARMED || this.state === MotionState.POSSIBLE_BITE; }
 
   update(signals, now) {
     if (!UPDATABLE.has(this.state)) return { state: this.state, changed: false };

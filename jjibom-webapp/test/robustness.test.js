@@ -165,3 +165,17 @@ test('analyzeBite ignores samples before `since` and samples taken while shaking
   const noShake = analyzeBite(shaken, { now, windowMs: 2600, waveMadN: 0.03, detectMode: 'balanced', sensitivity: 0.5 });
   assert.ok(noShake.score < all.score);
 });
+
+test('the motion alarm gate stays shut outside listening states', () => {
+  const gate = new MotionAlarmGate();
+  let fired = null;
+  for (let t = 0; t <= 600; t += 60) fired = fired || gate.update(95, 'strong_pull', false, t, false);
+  assert.equal(fired, null, 'no alarm while STABILIZING / PAUSED / ERROR');
+  for (let t = 660; t <= 1200; t += 60) fired = fired || gate.update(95, 'strong_pull', false, t, true);
+  assert.ok(fired, 'fires once listening again');
+  const m = new MotionMachine();
+  m.set(MotionState.STABILIZING, 0);
+  assert.equal(m.isListening(), false);
+  m.set(MotionState.POSSIBLE_BITE, 0);
+  assert.equal(m.isListening(), true);
+});

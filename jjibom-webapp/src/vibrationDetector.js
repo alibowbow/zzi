@@ -168,8 +168,10 @@ export class MotionAlarmGate {
     this._confirmSince = 0;
   }
   isMuted(now) { return now < this._muteUntil || now < this._cooldownUntil; }
-  update(score, pattern, contact, now) {
-    if (contact || this.isMuted(now)) { this._confirmSince = 0; return null; }
+  // `open` is false while the state machine is not listening for bites
+  // (STABILIZING after a knock, PAUSED, ERROR): nothing may fire then.
+  update(score, pattern, contact, now, open = true) {
+    if (!open || contact || this.isMuted(now)) { this._confirmSince = 0; return null; }
     if (score >= MOTION.TRIGGER_SCORE) {
       if (!this._confirmSince) this._confirmSince = now;
       if (now - this._confirmSince >= MOTION.CONFIRM_MS) {
