@@ -448,6 +448,11 @@ final class MotionDetector {
             confirmSince = 0;
         }
 
+        /** Our alarm stopped: only a short trailing buzz can still reach the sensor. */
+        void endSelfVibration(double now, double trailingMs) {
+            muteUntil = Math.min(muteUntil, now + trailingMs);
+        }
+
         boolean isMuted(double now) {
             return now < muteUntil || now < cooldownUntil;
         }

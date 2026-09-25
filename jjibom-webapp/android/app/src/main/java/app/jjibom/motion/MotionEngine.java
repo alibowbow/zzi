@@ -139,6 +139,11 @@ final class MotionEngine {
         gate.muteForSelfVibration(now, ms);
     }
 
+    /** The alarm was stopped early: keep only a short trailing mute. */
+    void endSelfVibration(double now, double trailingMs) {
+        gate.endSelfVibration(now, trailingMs);
+    }
+
     void stop() {
         state = State.IDLE;
         buffer.clear();

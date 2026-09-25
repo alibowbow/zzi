@@ -356,7 +356,7 @@ public class VibrationDetectionService extends Service implements SensorEventLis
             return;
         }
         double now = now();
-        engine.muteForSelfVibration(now, 600);
+        engine.endSelfVibration(now, 600);
         engine.dismissAlarm(now);
         publishState(engine.state().id);
     }

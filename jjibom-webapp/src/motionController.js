@@ -195,7 +195,7 @@ export class MotionController {
   dismissAlarm() {
     const now = performance.now();
     this.alarm?.stop();
-    this.gate.muteForSelfVibration(now, 400); // ignore trailing buzz
+    this.gate.endSelfVibration(now, 400); // ignore only the trailing buzz
     if (this.isNative()) { nativeMotion.acknowledgeAlarm().catch(() => {}); return; }
     this.machine.dismissAlarm(now);
     this._setState(this.machine.state);

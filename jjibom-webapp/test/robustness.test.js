@@ -179,3 +179,12 @@ test('the motion alarm gate stays shut outside listening states', () => {
   m.set(MotionState.POSSIBLE_BITE, 0);
   assert.equal(m.isListening(), true);
 });
+
+test('stopping the alarm ends the long self-vibration mute early', () => {
+  const gate = new MotionAlarmGate();
+  gate.muteForSelfVibration(0, 21300); // whole alarm duration
+  assert.equal(gate.isMuted(10000), true);
+  gate.endSelfVibration(2000, 400); // user stopped it at 2 s
+  assert.equal(gate.isMuted(2300), true, 'trailing buzz still ignored');
+  assert.equal(gate.isMuted(2500), false, 'listening again');
+});

@@ -167,6 +167,11 @@ export class MotionAlarmGate {
     this._muteUntil = Math.max(this._muteUntil, now + ms);
     this._confirmSince = 0;
   }
+  // Our alarm stopped (dismissed or played out): only a short trailing buzz
+  // can still reach the sensor, so end a longer self-vibration mute early.
+  endSelfVibration(now, trailingMs = 400) {
+    this._muteUntil = Math.min(this._muteUntil, now + trailingMs);
+  }
   isMuted(now) { return now < this._muteUntil || now < this._cooldownUntil; }
   // `open` is false while the state machine is not listening for bites
   // (STABILIZING after a knock, PAUSED, ERROR): nothing may fire then.
